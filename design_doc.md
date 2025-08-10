@@ -1,4 +1,4 @@
-# Music Simu‑Listening over LAN --- Concise Design Doc
+# Music Simu‑Listening over LAN — Concise Design Doc
 
 Drafted by GPT-5.  
 
@@ -23,6 +23,7 @@ Prioritize simplicity of the implementation.
     -   **SSE** (Server‑Sent Events) for state change broadcasts.
     -   Persists global state to JSON on every accepted event
         (context‑managed write).
+    -   Detects disconnect via **SSE close + heartbeat timeout**.
 -   **Client (HTML+JS, mobile‑first):**
     -   Single‑page app with **three tabs**: *Current Song*, *Queue*, *Sharing*.
     -   `<audio>` element playback from **Blob URLs**.
@@ -61,19 +62,24 @@ Prioritize simplicity of the implementation.
 -   `STATE_FILE`: JSON path (constant).
 
 ### Persistent State (JSON)
-A map from room code to room state.
+Map: room code → room state. Keep only what we truly need.
 
 ``` json
 {
     "rb9ro3": {
         "eventCount": 42,
-        "queue": [ "<trackId>", ... ],
+        "queue": ["<trackId>", "..."] ,
         "playState": { "mode": "playing|paused|onBarrier", "anchorPositionSec": 0 },
-        "barrier": [["c1", "ok"], ["c2", "downloading"]],
-        "clients": { "c1": {"name":"Alice"}, "c2": ... }
+        "barrier": { "trackId": "t123", "ready": ["c1"], "pending": ["c2"] },
+        "clients": {
+            "c1": { "name": "Alice", "lastPingSec": 1723320000, "sse": true },
+            "c2": { "name": "Bob",   "lastPingSec": 1723320012, "sse": true }
+        }
     }
 }
 ```
+
+Runtime derived (not persisted or cheaply recomputed): active set = clients where `sse == true` AND `now - lastPingSec <= 6`.
 
 ### HTTP Endpoints
 
@@ -84,8 +90,8 @@ A map from room code to room state.
     -   `POST /pair` `{room_code, clientName}` →
         `{clientId, eventCount, snapshot}`
 -   **Index & Metadata**
-    -   `GET /index` → playlist index
-        `[ {trackId, fileName, size, mime, duration?, tags?, coverUrl?}, ... ]`
+    -   `GET /index` → queue index
+        `[ {trackId, fileName, size, mime, duration}, ... ]`
     -   `GET /cover/:trackId` → image (if embedded art found)
 -   **Files**
     -   `GET /file/:trackId` → full file.
@@ -93,6 +99,7 @@ A map from room code to room state.
     -   `GET /snapshot` → full snapshot of state described above
     -   `GET /events` (SSE) → pushes on **state change only**:
         `{event, payload, eventCount}`
+    -   `POST /ping` `{clientId}` → updates `lastPingSec`; idempotent, no eventCount header, no SSE broadcast.
 -   **Control (all require `If-Match-Event: <eventCount>` header)**
     -   `POST /play` `{positionSec}` → start/resume
     -   `POST /pause` `{positionSec}`
@@ -108,16 +115,17 @@ A map from room code to room state.
 `eventCount` mismatch → `{expectedEventCount, snapshot}` (client shows
 warning and refreshes)
 
-### Barrier Logic
+### Barrier & Activity Logic
 
--   **Active set:** all currently paired clients that haven't
-    disconnected (server updates membership on SSE disconnect).
--   **Ready set:** subset of active set that reported full download via
-    `/ack-download`.
--   **Release:** when `ready == active`, server emits event
-    `barrier.release {trackId}` with new `eventCount`.
--   **Disconnect handling:** if a client disconnects during a barrier,
-    server **shrinks active set** and re‑evaluates. 
+Simplify: barrier considers only *active* clients.
+
+- **Active set:** clients with open SSE (`sse == true`) AND fresh ping (`now - lastPingSec <= 6`). This is an exception to the "no clock" principle.
+- **Primary signal:** SSE close → immediately drop client from active + barrier readiness lists; re‑evaluate barrier.
+- **Heartbeat:** clients `POST /ping` about every 3 s. If stale (>6 s) treat as disconnected even if TCP not closed (e.g. backgrounded tab); remove from active + readiness.
+- **Ready set:** active clients that called `/ack-download` for current track.
+- **Release:** when `ready == active`, emit `barrier.release {trackId}` and advance play state.
+- **Late joiners:** newly (re)active clients during an ongoing barrier are ignored for that barrier; they participate starting with the **next** track.
+- **Reconnect flow:** client reopens SSE, sends `/ping`, calls `/snapshot` to resync; server reinstates it (for future barriers only).
 
 ### Persistence
 
@@ -127,7 +135,7 @@ warning and refreshes)
     3)  emit SSE with updated `eventCount`.
 -   On startup: load state; if corrupt → return 500 on control; log
     "SCREAM" and require manual fix.
--   Client disconnection is detected via TODO
+-   Client disconnection is detected via **SSE close** OR **heartbeat timeout (no /ping within 6 s)**.
 
 ### misc
 - Prints the landing page URL (192.168...) on startup.  
@@ -137,9 +145,9 @@ warning and refreshes)
 
 ## Client Details
 
-### UI (2 Tabs)
+### UI (3 Tabs)
 
-- The song player widget is always present. On top, three possible tabs: current song, queue, and sharing.
+- The song player widget is always present. On top, three tabs: current song, queue, and sharing.
 - **song player**
     -   Title/artist.
     -   Buttons: **Play/Pause**, **Seek bar**, **Next**.
@@ -212,11 +220,12 @@ warning and refreshes)
 
 ## Notes / Tradeoffs
 
--   **No clocks:** start alignment is "event‑receipt synchronous";
+-   **Almost no clocks:** start alignment is "event‑receipt synchronous";
     real‑time skew accepted. Audio decoding speed on phone may result in skew when the song is long.  
 -   **HTTP‑only:** SSE for broadcast avoids WebSocket complexity; widely
     supported.
 -   **Minimal recovery:** restart tolerated; JSON state reload ensures
     continuity.
+ -   Heartbeat is intentionally coarse (6 s) to stay battery‑friendly.
 
 ------------------------------------------------------------------------
