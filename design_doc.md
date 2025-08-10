@@ -1,4 +1,4 @@
-# Music Co‑Listening (LAN) --- Concise Design Doc
+# Music Simu‑Listening over LAN --- Concise Design Doc
 
 Drafted by GPT-5.  
 
