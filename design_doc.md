@@ -70,10 +70,9 @@ Map: room code → room state. Keep only what we truly need.
         "eventCount": 42,
         "queue": ["<trackId>", "..."] ,
         "playState": { "mode": "playing|paused|onBarrier", "anchorPositionSec": 0 },
-        "barrier": { "trackId": "t123", "ready": ["c1"], "pending": ["c2"] },
         "clients": {
-            "c1": { "name": "Alice", "lastPingSec": 1723320000, "sse": true },
-            "c2": { "name": "Bob",   "lastPingSec": 1723320012, "sse": true }
+            "c1": { "name": "Alice", "lastPingSec": 1723320000, "sse": true, "cachedHeadTrackId": "t123" },
+            "c2": { "name": "Bob",   "lastPingSec": 1723320012, "sse": true, "cachedHeadTrackId": null }
         }
     }
 }
@@ -106,26 +105,28 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
     -   `POST /seek` `{positionSec}` (no barrier; sets new anchor)
     -   `POST /next` `{}`
     -   `POST /prev` `{}`
-    -   `POST /nudge` `{trackId}` → move `trackId` to **next-up**
-        position in the queue
-    -   `POST /ack-download` `{trackId}` → mark client ready for current
-        barrier
+    -   `POST /nudge` `{trackId}` → move `trackId` to **next-up** position in the queue
+    -   `POST /cache-head` `{trackId}` → client asserts: "I have cached this track" This updates only that client's `cachedHeadTrackId`. (Idempotent; rejected if `trackId` != current queue head.)
 
 **Responses:** - `200` on accept → `{eventCount, snapshot}` - `409` on
 `eventCount` mismatch → `{expectedEventCount, snapshot}` (client shows
 warning and refreshes)
 
 ### Barrier & Activity Logic
+Each client publishes its *latest cached queue-head track id* via `POST /cache-head` and the server stores it as `clients[clientId].cachedHeadTrackId`.
 
 Simplify: barrier considers only *active* clients.
 
-- **Active set:** clients with open SSE (`sse == true`) AND fresh ping (`now - lastPingSec <= 6`). This is an exception to the "no clock" principle.
-- **Primary signal:** SSE close → immediately drop client from active + barrier readiness lists; re‑evaluate barrier.
-- **Heartbeat:** clients `POST /ping` about every 3 s. If stale (>6 s) treat as disconnected even if TCP not closed (e.g. backgrounded tab); remove from active + readiness.
-- **Ready set:** active clients that called `/ack-download` for current track.
-- **Release:** when `ready == active`, emit `barrier.release {trackId}` and advance play state.
-- **Late joiners:** newly (re)active clients during an ongoing barrier are ignored for that barrier; they participate starting with the **next** track.
-- **Reconnect flow:** client reopens SSE, sends `/ping`, calls `/snapshot` to resync; server reinstates it (for future barriers only).
+- **Active set:** clients with open SSE (`sse == true`) AND fresh ping (`now - lastPingSec <= 6`).
+- **Primary signal:** SSE close → immediately mark client inactive; re‑evaluate barrier.
+- **Heartbeat:** clients `POST /ping` about every ~3 s. If stale (>6 s) treat as inactive.
+- **Per‑client cached marker:** a scalar `cachedHeadTrackId` (may be `null` initially). Client sends this only for the **current queue head** (never anticipating the next track) when it finishes fully caching that file.
+- **Barrier condition:** Let `H = queue[0]`. If for every active client `cachedHeadTrackId == H`, the barrier is considered satisfied and playback may (a) start that track if in `onBarrier` mode or (b) continue uninterrupted if already started. When the barrier is satisfied, the server changes the playState mode from "onBarrier" to "playing".
+- **State changes:** A client updating `cachedHeadTrackId` for the current head triggers evaluation. 
+- **Late joiners:** New active clients that haven't reported the current head naturally hold back the release if it hasn't fired yet. If the track is already playing (release already emitted), their `cachedHeadTrackId` is irrelevant for that already-started track; they just attempt to catch up (may hear mid‑track). They begin participating in the *next* head's barrier once that head becomes queue[0].
+- **Reconnect flow:** Client reopens SSE, pings, fetches snapshot, and (re)issues `cache-head` for the current head once cached (or after re-downloading). Until then, it's excluded only if release already happened; otherwise it can still delay release.
+
+Rationale: This model removes explicit barrier bookkeeping and racey list mutations; state per client becomes an *idempotent declaration* of the last head they fully possess. The server derives readiness by comparison, enabling simpler recovery and fewer write patterns.
 
 ### Persistence
 
