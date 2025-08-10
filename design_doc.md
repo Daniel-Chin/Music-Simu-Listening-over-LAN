@@ -5,7 +5,7 @@ Drafted by GPT-5.
 ## Goal
 
 Multi‑user co‑listening on the same LAN with synchronized
-**event‑based** starts (no clocks). Server hosts files and state;
+**event‑based** starts (avoid using clocks). Server hosts files and state;
 clients on Android phones download full files, cache locally, and play in lockstep at
 barrier releases. Anyone can control; race conditions prevented via
 **eventCount**.
@@ -24,7 +24,7 @@ Prioritize simplicity of the implementation.
     -   Persists global state to JSON on every accepted event
         (context‑managed write).
 -   **Client (HTML+JS, mobile‑first):**
-    -   Single‑page app with **two tabs**: *Current Song*, *Queue*.
+    -   Single‑page app with **three tabs**: *Current Song*, *Queue*, *Sharing*.
     -   `<audio>` element playback from **Blob URLs**.
     -   Uses **Cache Storage API** for whole‑file caching; **IndexedDB**
         for light metadata.
@@ -35,8 +35,8 @@ Prioritize simplicity of the implementation.
 ## Concepts & Invariants
 
 -   **Playlist:** static scan of server directory. Not shown in UI.
--   **Queue:** ordering of playlist; current item highlighted. When a
-    song finishes, it's appended to the end (circulation).
+-   **Queue:** ordering of playlist; current item highlighted. It is a circular queue. When a
+    song finishes, it's appended to the end. 
 -   **Event Topology:** all mutating actions increment `eventCount`.
     Clients must include `eventCount` with every command; server rejects
     mismatches.
@@ -59,7 +59,6 @@ Prioritize simplicity of the implementation.
 
 -   `AUDIO_DIR`: absolute path (constant).
 -   `STATE_FILE`: JSON path (constant).
--   TLS optional (self‑signed feasible but expects browser warnings).
 
 ### Persistent State (JSON)
 A map from room code to room state.
@@ -71,7 +70,7 @@ A map from room code to room state.
         "queue": [ "<trackId>", ... ],
         "playState": { "mode": "playing|paused|onBarrier", "anchorPositionSec": 0 },
         "barrier": [["c1", "ok"], ["c2", "downloading"]],
-        "clients": { "c1": {"name":"Alice", "addr":["192.168.1.21", 25835]}, "c2": ... }
+        "clients": { "c1": {"name":"Alice"}, "c2": ... }
     }
 }
 ```
@@ -162,9 +161,8 @@ warning and refreshes)
 
 -   **SSE** connect on load; apply diffs on messages.
 -   On user command:
-    -   Capture current `<audio>.currentTime` as `positionSec`,
     -   Send POST with `If-Match-Event`,
-    -   On `409`, show bubble "operation ignored becuase we are out-of-sync; refreshing...", then apply
+    -   On `409`, show bubble "operation ignored because we are out-of-sync; refreshing...", then apply
         server `snapshot`. Do not auto re-send the ignored request.
 
 ### Caching
@@ -220,6 +218,5 @@ warning and refreshes)
     supported.
 -   **Minimal recovery:** restart tolerated; JSON state reload ensures
     continuity.
--   **TLS:** optional; expect warnings with self‑signed on phones.
 
 ------------------------------------------------------------------------
