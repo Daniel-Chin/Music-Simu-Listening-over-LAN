@@ -1,5 +1,7 @@
 # Music Co‑Listening (LAN) --- Concise Design Doc
 
+Drafted by GPT-5.  
+
 ## Goal
 
 Multi‑user co‑listening on the same LAN with synchronized
@@ -8,11 +10,13 @@ clients download full files, cache locally, and play in lockstep at
 barrier releases. Anyone can control; race conditions prevented via
 **eventCount**.
 
+Prioritize simplicity of the implementation.  
+
 ------------------------------------------------------------------------
 
 ## Architecture
 
--   **Server (Python, single‑thread):**
+-   **Server (express js):**
     -   HTTP only.
     -   Serves static audio files from a fixed directory.
     -   REST for control commands.
@@ -68,6 +72,7 @@ barrier releases. Anyone can control; race conditions prevented via
 ``` json
 {
   "eventCount": 42,
+  "roomCode": "c0ffee",
   "queue": [ "<trackId>", ... ],
   "queueIndex": 7,
   "playState": { "mode": "playing|paused", "anchorPositionSec": 0 },
@@ -78,9 +83,11 @@ barrier releases. Anyone can control; race conditions prevented via
 
 ### HTTP Endpoints
 
+-   **UI**
+    -   `GET /landing` → webpage of: two input fields (room_code, name). Room code is auto-filled if in URL params. Name is autofilled according to persistent storage.
+    -   `GET /` → webpage of: the main UI. 
 -   **Discovery & Pairing**
-    -   `GET /qr` → PNG (URL + random code embedded or displayed)
-    -   `POST /pair` `{code, clientName}` →
+    -   `POST /pair` `{room_code, clientName}` →
         `{clientId, eventCount, snapshot}`
 -   **Index & Metadata**
     -   `GET /index` → playlist index
@@ -129,23 +136,33 @@ warning and refreshes)
 -   On startup: load state; if corrupt → return 500 on control; log
     "SCREAM" and require manual fix.
 
+### misc
+- Prints the landing page URL (192.168...) on startup.  
+- Assumes 1 total room.
+
 ------------------------------------------------------------------------
 
 ## Client Details
 
 ### UI (2 Tabs)
 
-1.  **Current Song**
-    -   Cover, title/artist.
+- The song player widget is always present. On top, three possible tabs: current song, queue, and sharing.
+- **song player**
+    -   Title/artist.
     -   Buttons: **Play/Pause**, **Seek bar**, **Next**.
+    -   warning bubbles for rejected commands.
+- **Current Song**
+    -   Cover.
     -   Status line:
         -   "downloading X%"
         -   "waiting for others to download (a/b ready)"
-        -   warning bubbles for rejected commands.
-2.  **Queue**
+- **sharing**
+    -   A URL with room code as param, its QR code image, and the room code itself.  
+- **Queue**
     -   Simple list in play order; current highlighted, next-up pinned.
     -   Each row: title/artist · duration · **Nudge to next-up**.
     -   Pull‑to‑refresh (optional).
+- Use plain js.  
 
 ### Networking
 
@@ -153,7 +170,7 @@ warning and refreshes)
 -   On user command:
     -   Capture current `<audio>.currentTime` as `positionSec`,
     -   Send POST with `If-Match-Event`,
-    -   On `409`, show bubble "Out of date; refreshing...", then apply
+    -   On `409`, show bubble "operation ignored becuase we are out-of-sync; refreshing...", then apply
         server `snapshot`.
 
 ### Caching
@@ -185,12 +202,11 @@ warning and refreshes)
 
 ## Security & Pairing
 
--   **QR contains:** server URL; user manually inputs a short random
-    code (displayed with QR).
--   **Auth:** `POST /pair` validates code → issues `clientId` (opaque
-    token in cookie or header).
+-   **Room code** six characters.
+-   **Auth:** `POST /pair` validates code → issues hard-to-guess `clientId` (opaque
+    token in header).
 -   Code rotates on server restart (simple, face‑to‑face assumption).
--   No PII; names optional.
+-   No PII.
 
 ------------------------------------------------------------------------
 
