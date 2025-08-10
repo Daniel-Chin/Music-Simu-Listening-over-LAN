@@ -6,7 +6,7 @@ Drafted by GPT-5.
 
 Multi‑user co‑listening on the same LAN with synchronized
 **event‑based** starts (no clocks). Server hosts files and state;
-clients download full files, cache locally, and play in lockstep at
+clients on Android phones download full files, cache locally, and play in lockstep at
 barrier releases. Anyone can control; race conditions prevented via
 **eventCount**.
 
@@ -48,12 +48,8 @@ Prioritize simplicity of the implementation.
 -   **Barriers:**
     -   **Track start barrier:** new track starts **only when all
         members of the active set have fully cached the track**.
-    -   **Resume barrier (if paused):** resume when all active members
-        have the current track cached.
     -   **Late joiners:** excluded from the already‑released barrier;
-        included from the **next** barrier (or next resume if paused).
-    -   **Early leave:** server instructs clients to refresh; server
-        restarts; state reloaded from JSON.
+        included from the **next** barrier (i.e. next song).
 
 ------------------------------------------------------------------------
 
@@ -63,21 +59,20 @@ Prioritize simplicity of the implementation.
 
 -   `AUDIO_DIR`: absolute path (constant).
 -   `STATE_FILE`: JSON path (constant).
--   `PAIRING_WINDOW`: active after restart until first pairing completes
-    (optional).
 -   TLS optional (self‑signed feasible but expects browser warnings).
 
 ### Persistent State (JSON)
+A map from room code to room state.
 
 ``` json
 {
-  "eventCount": 42,
-  "roomCode": "c0ffee",
-  "queue": [ "<trackId>", ... ],
-  "queueIndex": 7,
-  "playState": { "mode": "playing|paused", "anchorPositionSec": 0 },
-  "barrier": { "type": "track|resume", "trackId": "<id>", "members": ["c1","c2"], "ready": ["c1"] },
-  "clients": { "c1": {"name":"Alice"}, "c2": {"name":"…"} }
+    "rb9ro3": {
+        "eventCount": 42,
+        "queue": [ "<trackId>", ... ],
+        "playState": { "mode": "playing|paused|onBarrier", "anchorPositionSec": 0 },
+        "barrier": [["c1", "ok"], ["c2", "downloading"]],
+        "clients": { "c1": {"name":"Alice", "addr":["192.168.1.21", 25835]}, "c2": ... }
+    }
 }
 ```
 
@@ -94,19 +89,17 @@ Prioritize simplicity of the implementation.
         `[ {trackId, fileName, size, mime, duration?, tags?, coverUrl?}, ... ]`
     -   `GET /cover/:trackId` → image (if embedded art found)
 -   **Files**
-    -   `GET /file/:trackId` → full file; supports Range (resume).
-        (Clients still fetch full file for caching.)
+    -   `GET /file/:trackId` → full file.
 -   **State & SSE**
-    -   `GET /snapshot` → full snapshot
-        `{eventCount, queue, queueIndex, playState, barrier}`
+    -   `GET /snapshot` → full snapshot of state described above
     -   `GET /events` (SSE) → pushes on **state change only**:
         `{event, payload, eventCount}`
 -   **Control (all require `If-Match-Event: <eventCount>` header)**
-    -   `POST /play` `{positionSec}` → start/resume; enters **resume
-        barrier** if needed
+    -   `POST /play` `{positionSec}` → start/resume
     -   `POST /pause` `{positionSec}`
     -   `POST /seek` `{positionSec}` (no barrier; sets new anchor)
     -   `POST /next` `{}`
+    -   `POST /prev` `{}`
     -   `POST /nudge` `{trackId}` → move `trackId` to **next-up**
         position in the queue
     -   `POST /ack-download` `{trackId}` → mark client ready for current
@@ -125,7 +118,7 @@ warning and refreshes)
 -   **Release:** when `ready == active`, server emits event
     `barrier.release {trackId}` with new `eventCount`.
 -   **Disconnect handling:** if a client disconnects during a barrier,
-    server **shrinks active set** and re‑evaluates. (Per your policy.)
+    server **shrinks active set** and re‑evaluates. 
 
 ### Persistence
 
@@ -135,10 +128,11 @@ warning and refreshes)
     3)  emit SSE with updated `eventCount`.
 -   On startup: load state; if corrupt → return 500 on control; log
     "SCREAM" and require manual fix.
+-   Client disconnection is detected via TODO
 
 ### misc
 - Prints the landing page URL (192.168...) on startup.  
-- Assumes 1 total room.
+- A song reaching its end is a server-initiated event. This is an exception to the "no live clock" principle. 
 
 ------------------------------------------------------------------------
 
@@ -171,7 +165,7 @@ warning and refreshes)
     -   Capture current `<audio>.currentTime` as `positionSec`,
     -   Send POST with `If-Match-Event`,
     -   On `409`, show bubble "operation ignored becuase we are out-of-sync; refreshing...", then apply
-        server `snapshot`.
+        server `snapshot`. Do not auto re-send the ignored request.
 
 ### Caching
 
@@ -204,7 +198,7 @@ warning and refreshes)
 
 -   **Room code** six characters.
 -   **Auth:** `POST /pair` validates code → issues hard-to-guess `clientId` (opaque
-    token in header).
+    token in header) (instead of c1, c2).
 -   Code rotates on server restart (simple, face‑to‑face assumption).
 -   No PII.
 
@@ -221,7 +215,7 @@ warning and refreshes)
 ## Notes / Tradeoffs
 
 -   **No clocks:** start alignment is "event‑receipt synchronous";
-    real‑time skew accepted.
+    real‑time skew accepted. Audio decoding speed on phone may result in skew when the song is long.  
 -   **HTTP‑only:** SSE for broadcast avoids WebSocket complexity; widely
     supported.
 -   **Minimal recovery:** restart tolerated; JSON state reload ensures
