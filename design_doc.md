@@ -40,7 +40,7 @@ Prioritize simplicity of the implementation.
     song finishes, it's appended to the end. 
 -   **Event Topology:** all mutating actions increment `eventCount`.
     Clients must include `eventCount` with every command; server rejects
-    mismatches.
+    mismatches. eventCount is mod 2^14.
 -   **States:**
     -   `playing from Xsec` (anchorPositionSec set when the event was
         emitted; no live clock kept).
@@ -135,7 +135,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
     1)  mutate in‑memory state,
     2)  **atomic write** to `STATE_FILE` (write temp + fsync + rename),
     3)  emit SSE with updated `eventCount`.
--   On startup: load state; if corrupt, fatal error. Then, the queue should be updated. First load the playlist from fs. Sort it according to filename. Initiate a new queue by rotating the playlist according to the head item of the old queue in persistent JSON. Goal: capture audio dir changes while keeping listening progress. If head is not found in new playlist, skip rotating.
+-   On startup: load state; if corrupt, fatal error. Then, the queue should be updated. First load the playlist from fs. Sort it according to filename. Initiate a new queue by rotating the playlist according to the head item of the old queue in persistent JSON. Goal: capture audio dir changes while keeping listening progress. If head is not found in new playlist, skip rotating. Then, null all cachedHeadTrackId. Then, increment `eventCount`.  
 -   Client disconnection is detected via **SSE close** OR **heartbeat timeout (no /ping within 6 s)**.
 
 ### misc
@@ -165,7 +165,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
         -   "downloading X%"
         -   "waiting for others to download (a/b ready)"
 - **sharing**
-    -   A URL with room code as param, its QR code image, and the room code itself.  
+    -   A URL to "/" (not landing!) with room code as param, its QR code image, and the room code itself.  
 - **Queue**
     -   Simple list in play order; current highlighted, next-up pinned.
     -   Each row: title/artist · duration · **Nudge to next-up**.
@@ -180,7 +180,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
     -   On `409`, show bubble "operation ignored because we are out-of-sync; refreshing...", then apply
         server `snapshot`. Do not auto re-send the ignored request.
 
-### Caching
+### Song caching
 
 -   **Policy:** pin **current + next + last 3 played** (5 total).
 -   **Budget:** use `navigator.storage.estimate()`; on overflow, evict
@@ -212,7 +212,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
 -   **Room code** six characters.
 -   **Auth:** `POST /pair` validates code → issues hard-to-guess `clientId` (opaque
     token in header) (instead of c1, c2).
--   Code rotates on server restart (simple, face‑to‑face assumption).
+-   The browser persistently stores clientId and client nickname. If these entries are not found when loading "/", go to "/landing".
 -   No PII.
 
 ------------------------------------------------------------------------
