@@ -95,11 +95,15 @@ const applySnapshot = (snap) => {
   maybePrefetchHeadAndNext().catch(console.error);
   // Apply play/paused state anchor
   const playState = serverState.roomState.playState;
+  const desiredPos = playState.anchorPositionSec || 0;
   if (playState.mode === 'playing') {
-    els.audio.currentTime = playState.anchorPositionSec || 0;
+    if (Math.abs(els.audio.currentTime - desiredPos) >= 0.5) {
+      // avoid unecessary clicks
+      els.audio.currentTime = desiredPos;
+    }
     els.audio.play().catch(()=>{});
   } else if (playState.mode === 'paused') {
-    els.audio.currentTime = playState.anchorPositionSec || 0;
+    els.audio.currentTime = desiredPos;
     els.audio.pause();
   } else if (playState.mode === 'onBarrier') {
     els.audio.pause();
