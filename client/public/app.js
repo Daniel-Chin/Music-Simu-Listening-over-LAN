@@ -468,32 +468,28 @@ const evictIfNeeded = async () => {
 };
 
 const maybePrefetchHeadAndNext = async () => {
-  try {
-    const head = serverState.roomState.queue[0];
-    const next = serverState.roomState.queue[1];
-    if (!head) return;
-    // Build blob URL for head
-    const headURL = await getTrackBlobURL(head, true);
-    if (els.audio.src !== headURL) {
-      els.audio.src = headURL;
-    }
-
-    // Preload metadata if duration missing
-    if (!findIndexItem(head)?.duration) {
-      const tmp = document.createElement('audio');
-      tmp.preload = 'metadata';
-      tmp.src = headURL;
-      tmp.onloadedmetadata = () => { /* metadata learned implicitly */ };
-    }
-
-    // Pre-fetch next
-    if (next) {
-      await getTrackBlobURL(next, false);
-    }
-    await evictIfNeeded();
-  } catch (e) {
-    console.error(e);
+  const head = serverState.roomState.queue[0];
+  const next = serverState.roomState.queue[1];
+  if (!head) return;
+  // Build blob URL for head
+  const headURL = await getTrackBlobURL(head, true);
+  if (els.audio.src !== headURL) {
+    els.audio.src = headURL;
   }
+
+  // Preload metadata if duration missing
+  if (!findIndexItem(head)?.duration) {
+    const tmp = document.createElement('audio');
+    tmp.preload = 'metadata';
+    tmp.src = headURL;
+    tmp.onloadedmetadata = () => { /* metadata learned implicitly */ };
+  }
+
+  // Pre-fetch next
+  if (next) {
+    await getTrackBlobURL(next, false);
+  }
+  await evictIfNeeded();
 };
 
 els.audio.addEventListener('ended', async () => {

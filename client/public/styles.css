@@ -82,6 +82,7 @@ input[type=range] {
     display: flex;
     gap: 8px;
     padding: 8px 16px;
+    margin-bottom: 36px;
     background: #0f172a;
     position: sticky;
     top: 52px;
@@ -135,7 +136,7 @@ input[type=range] {
 
 .bubble {
     position: fixed;
-    bottom: 16px;
+    bottom: 72px;
     left: 50%;
     transform: translateX(-50%);
     background: #111827;
@@ -143,7 +144,8 @@ input[type=range] {
     border: 1px solid #374151;
     padding: 10px 14px;
     border-radius: 10px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, .3)
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .3);
+    z-index: 1000;
 }
 
 .hidden {
