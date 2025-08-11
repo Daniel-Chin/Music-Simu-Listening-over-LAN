@@ -157,7 +157,20 @@ const render = () => {
   if (item) {
     els.title.textContent = item.title || item.fileName;
     els.artist.textContent = item.artist || 'Unknown';
-    els.cover.src = '/cover/' + headId;
+    const coverUrl = '/cover/' + headId;
+    els.cover.src = coverUrl;
+
+    // Inject cover art into currentInfo
+    let embedded = els.currentInfo.querySelector('.embedded-cover');
+    if (!embedded) {
+      embedded = document.createElement('img');
+      embedded.className = 'embedded-cover';
+      embedded.style.maxWidth = '100%';
+      embedded.style.display = 'block';
+      embedded.style.marginBottom = '0.5rem';
+      els.currentInfo.prepend(embedded);
+    }
+    if (embedded.src !== location.origin + coverUrl) embedded.src = coverUrl;
   }
   renderQueue();
   renderStatus();
