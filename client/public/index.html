@@ -13,31 +13,6 @@
     </header>
 
     <main>
-      <div class='player'>
-        <div class='meta'>
-          <img id='cover' alt='cover'>
-          <div class='text'>
-            <div id='title'>—</div>
-            <div id='artist'>—</div>
-          </div>
-        </div>
-        <audio id='audio' preload='metadata' playsinline></audio>
-        <div class='controls'>
-          <button id='prevBtn'>⏮</button>
-          <button id='playPauseBtn'>▶️/⏸️</button>
-          <button id='nextBtn'>⏭</button>
-        </div>
-        <input type='range' id='seek' min='0' max='100' value='0'>
-        <div id='statusLine'>—</div>
-      </div>
-
-      <nav class='tabs'>
-        <button data-tab='current' class='active'>Song</button>
-        <button data-tab='queue'>Queue</button>
-        <button data-tab='members'>Room</button>
-        <button data-tab='sharing'>Invite</button>
-      </nav>
-
       <section id='tab-current' class='tab active'>
         <div id='current-info'></div>
       </section>
@@ -58,6 +33,31 @@
         <ul id='members-list'></ul>
       </section>
     </main>
+    
+    <div class='player'>
+      <div class='meta'>
+        <img id='cover' alt='cover'>
+        <div class='text'>
+          <div id='title'>—</div>
+          <div id='artist'>—</div>
+        </div>
+      </div>
+      <audio id='audio' preload='metadata' playsinline></audio>
+      <div class='controls'>
+        <button id='prevBtn'>⏮</button>
+        <button id='playPauseBtn'>▶️/⏸️</button>
+        <button id='nextBtn'>⏭</button>
+      </div>
+      <input type='range' id='seek' min='0' max='100' value='0'>
+      <div id='statusLine'>—</div>
+    </div>
+
+    <nav class='tabs'>
+      <button data-tab='current' class='active'>Song</button>
+      <button data-tab='queue'>Queue</button>
+      <button data-tab='members'>Room</button>
+      <button data-tab='sharing'>Invite</button>
+    </nav>
 
     <div id='bubble' class='bubble hidden'></div>
   </div>
