@@ -361,8 +361,10 @@ const printLandingURL = () => {
   const roomsList = Object.keys(rooms);
   const room = roomsList[0];
   const ips = getLanIPs();
-  const base = ips.length ? `http://${ips[0]}:${PORT}` : `http://localhost:${PORT}`;
-  console.log(`Landing page: ${base}/landing?room=${room}`);
+  console.log("Potential URLs:");
+  for (const ip of ips) {
+    console.log(`http://${ip}:${PORT}/?room=${room}`);
+  }
 };
 
 // Start server
