@@ -125,7 +125,7 @@ Simplify: barrier considers only *active* clients.
 - **Barrier condition:** Let `H = queue[0]`. If for every active client `cachedHeadTrackId == H`, the barrier is considered satisfied and playback may (a) start that track if in `onBarrier` mode or (b) continue uninterrupted if already started. When the barrier is satisfied, the server changes the playState mode from "onBarrier" to "playing".
 - **State changes:** A client updating `cachedHeadTrackId` for the current head triggers evaluation. 
 - **Late joiners:** New active clients that haven't reported the current head naturally hold back the release if it hasn't fired yet. If the track is already playing (release already emitted), their `cachedHeadTrackId` is irrelevant for that already-started track; they just attempt to catch up (may hear mid‑track). They begin participating in the *next* head's barrier once that head becomes queue[0].
-- **Reconnect flow:** Client reopens SSE, pings, fetches snapshot, and (re)issues `cache-head` for the current head once cached (or after re-downloading). Until then, it's excluded only if release already happened; otherwise it can still delay release.
+- **Reconnect flow:** Client reopens SSE, pings, fetches snapshot, and (re)issues `cache-head` for the current head once cached. Until then, it's excluded only if release already happened; otherwise it can still delay release.
 
 Rationale: This model removes explicit barrier bookkeeping and racey list mutations; state per client becomes an *idempotent declaration* of the last head they fully possess. The server derives readiness by comparison, enabling simpler recovery and fewer write patterns.
 
