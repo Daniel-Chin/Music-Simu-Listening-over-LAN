@@ -206,3 +206,16 @@ input[type=range] {
     border-radius: 12px;
     image-rendering: pixelated;
 }
+
+.controls {
+    display: flex;
+    justify-content: center; /* center horizontally */
+    gap: 1rem;               /* space between buttons */
+    padding: 1rem;
+}
+
+.controls > button {
+    font-size: 36px;
+    margin-left: 12px;
+    margin-right: 12px;
+}

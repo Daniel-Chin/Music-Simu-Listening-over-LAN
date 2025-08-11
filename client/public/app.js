@@ -197,6 +197,14 @@ const renderQueue = () => {
   });
 };
 
+const formatTime = (t) => {
+  const n_secs = Math.round(t);
+  const hours = Math.floor(n_secs / 3600);
+  const minutes = Math.floor((n_secs % 3600) / 60);
+  const seconds = n_secs % 60;
+  return `${hours > 0 ? hours + ':' : ''}${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
 const renderStatus = () => {
   const activeCount = Object.values(state.snapshot.clients || {}).filter(c => c.sse && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
   const head = state.queue[0];
@@ -209,9 +217,9 @@ const renderStatus = () => {
       els.statusLine.textContent = 'downloading...';
     }
   } else if (state.playState.mode === 'playing') {
-    els.statusLine.textContent = `playing at ${Math.round(els.audio.currentTime)}s`;
+    els.statusLine.textContent = `Playing at ${formatTime(els.audio.currentTime)}`;
   } else {
-    els.statusLine.textContent = `paused at ${Math.round(state.playState.anchorPositionSec)}s`;
+    els.statusLine.textContent = `Paused at ${formatTime(state.playState.anchorPositionSec)}`;
   }
   switch (state.playState.mode) {
     case 'playing':
@@ -231,21 +239,44 @@ const renderStatus = () => {
 // We keep LRU-ish set via state.recentLRU plus protect current head & next.
 const pinPolicyMax = 5; // current + next + last 3
 
+const fatalIDB = (err) => {
+  console.error('FATAL IndexedDB error – cannot proceed with caching', err);
+  showBubble('Fatal cache error; reload page.');
+  throw err instanceof Error ? err : new Error(String(err));
+};
+
 const getDB = (() => {
   let p;
-  return () => p || (p = new Promise((resolve, reject) => {
-    const req = indexedDB.open('audio', 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks');
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  }));
+  const open = () => new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open('audio', 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks');
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        db.onversionchange = () => {
+          try { db.close(); } catch {}
+          p = undefined; // force reopen on next access
+        };
+        resolve(db);
+      };
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => console.warn('IndexedDB open blocked.');
+    } catch (e) {
+      reject(e);
+    }
+  });
+  return async (force=false) => {
+    if (force) p = undefined;
+    if (!p) p = open();
+    return p;
+  };
 })();
 
 const idbGet = async (trackId) => {
-  const db = await getDB();
+  const db = await getDB().catch(fatalIDB);
   return await new Promise((res, rej) => {
     const tx = db.transaction('tracks', 'readonly');
     const store = tx.objectStore('tracks');
@@ -256,37 +287,78 @@ const idbGet = async (trackId) => {
 };
 
 const idbPut = async (trackId, blob) => {
-  const db = await getDB();
-  return await new Promise((res, rej) => {
-    const tx = db.transaction('tracks', 'readwrite');
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-    tx.objectStore('tracks').put(blob, trackId);
-  });
+  const attempt = async (reopen=false) => {
+    const db = await getDB(reopen).catch(fatalIDB);
+    return await new Promise((res, rej) => {
+      let failedSync = false;
+      try {
+        const tx = db.transaction('tracks', 'readwrite');
+        tx.oncomplete = () => res();
+        tx.onerror = () => rej(tx.error);
+        try { tx.objectStore('tracks').put(blob, trackId); }
+        catch (e) { failedSync = true; rej(e); }
+      } catch (e) {
+        if (!failedSync) rej(e);
+      }
+    });
+  };
+  try {
+    await attempt(false);
+  } catch (e) {
+    const msg = (e && e.message) || '';
+    if (e && (e.name === 'InvalidStateError' || /not allow(ed)? mutations/i.test(msg))) {
+      // Retry once after forced reopen
+      try {
+        await attempt(true);
+        return;
+      } catch (e2) {
+        fatalIDB(e2);
+      }
+    }
+    fatalIDB(e);
+  }
 };
 
 const idbDelete = async (trackId) => {
-  const db = await getDB();
-  return await new Promise((res, rej) => {
-    const tx = db.transaction('tracks', 'readwrite');
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-    tx.objectStore('tracks').delete(trackId);
-  });
+  const attempt = async (reopen=false) => {
+    const db = await getDB(reopen).catch(fatalIDB);
+    return await new Promise((res, rej) => {
+      try {
+        const tx = db.transaction('tracks', 'readwrite');
+        tx.oncomplete = () => res();
+        tx.onerror = () => rej(tx.error);
+        try { tx.objectStore('tracks').delete(trackId); }
+        catch (e) { rej(e); }
+      } catch (e) { rej(e); }
+    });
+  };
+  try {
+    await attempt(false);
+  } catch (e) {
+    const msg = (e && e.message) || '';
+    if (e && (e.name === 'InvalidStateError' || /not allow(ed)? mutations/i.test(msg))) {
+      try { await attempt(true); return; }
+      catch (e2) { fatalIDB(e2); }
+    }
+    fatalIDB(e);
+  }
 };
 
 const idbListKeys = async () => {
-  const db = await getDB();
+  const db = await getDB().catch(fatalIDB);
   return await new Promise((res, rej) => {
     const keys = [];
-    const tx = db.transaction('tracks', 'readonly');
-    const store = tx.objectStore('tracks');
-    const cursorReq = store.openKeyCursor();
-    cursorReq.onsuccess = (e) => {
-      const c = e.target.result;
-      if (c) { keys.push(c.key); c.continue(); } else res(keys); };
-    cursorReq.onerror = () => rej(cursorReq.error);
-  });
+    try {
+      const tx = db.transaction('tracks', 'readonly');
+      const store = tx.objectStore('tracks');
+      const cursorReq = store.openKeyCursor();
+      cursorReq.onsuccess = (e) => {
+        const c = e.target.result;
+        if (c) { keys.push(c.key); c.continue(); } else res(keys);
+      };
+      cursorReq.onerror = () => rej(cursorReq.error);
+    } catch (e) { rej(e); }
+  }).catch(fatalIDB);
 };
 
 const fetchAndStoreTrack = async (trackId) => {
