@@ -31,4 +31,3 @@ npm run dev
 - Dev-only endpoint: `/debug/state` dumps JSON.
 
 ## todo
-- fix ping results in re-seek

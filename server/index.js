@@ -260,17 +260,17 @@ app.post('/seek', (req, res) => {
   res.json({ ok: true });
 });
 
-const rotateQueue = (is_next_not_prev) => {
+const rotateQueue = (rs, is_next_not_prev) => {
   if (is_next_not_prev) {
     const head = rs.queue.shift();
     rs.queue.push(head);
   } else {
-    const tail = st.queue.pop();
-    st.queue.unshift(tail);
+    const tail = rt.queue.pop();
+    rt.queue.unshift(tail);
   }
   rs.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
   // null all cached markers (clients must re-assert for new head)
-  for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
+  for (const c of Object.values(rs.clients)) c.cachedHeadTrackId = null;
 };
 
 app.post('/next', (req, res) => {
@@ -278,7 +278,7 @@ app.post('/next', (req, res) => {
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
 
-  rotateQueue(true);
+  rotateQueue(rs, true);
 
   afterEvent(room, rs);
   res.json({ ok: true });
@@ -289,7 +289,7 @@ app.post('/prev', (req, res) => {
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
 
-  rotateQueue(false);
+  rotateQueue(rs, false);
 
   afterEvent(room, rs);
   res.json({ ok: true });

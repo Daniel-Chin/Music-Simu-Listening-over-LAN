@@ -88,9 +88,17 @@ const api = async (path, extraBody={}, requireEventHeader=false) => {
 
 const applySnapshot = (snap) => {
   if (!snap) return;
+  const head_change = (
+    ! serverState.roomState
+  ) || (
+    snap.roomState.queue[0] != serverState.roomState.queue[0]
+  );
   serverState.snapshot = snap;
   serverState.roomState = snap.roomState;
   serverState.index = snap.index.slice();
+  if (head_change) {
+    reportCachedHead().catch(console.error);
+  }
   render();
   maybePrefetchHeadAndNext().catch(console.error);
   // Apply play/paused state anchor
@@ -202,13 +210,12 @@ const renderMembers = () => {
   const head = serverState.roomState.queue[0];
   clients
     .sort((a,b)=>a[0].localeCompare(b[0]))
-    .forEach(([cid, c]) => {
+    .forEach(([clientName, c]) => {
       const li = document.createElement('li');
       const online = (nowSec - (c.lastPingSec || 0)) <= 6;
       const ready = online && c.cachedHeadTrackId === head;
       const parts = [];
-      if (c.name) parts.push(c.name); // show name if supplied
-      // parts.push(`(${cid.slice(0,4)})`);
+      parts.push(clientName);
       parts.push(online ? '🟢' : '⚪');
       if (ready) parts.push('[ready]');
       if (serverState.roomState.playState.mode === 'onBarrier' && online && !ready) parts.push('[downloading]');
@@ -400,6 +407,14 @@ const idbListKeys = async () => {
   }).catch(fatalIDB);
 };
 
+const reportCachedHead = async () => {
+  const head = serverState.roomState.queue[0];
+  if (! head) return;
+  if (head in localState.cacheRegistry) {
+    await api('/cache-head', { trackId: head });
+  }
+};
+
 const fetchAndStoreTrack = async (trackId) => {
   const url = `/file/${trackId}`;
   const resp = await fetch(url);
@@ -415,7 +430,7 @@ const getTrackBlobURL = async (trackId, is_head) => {
     try {
       blob = await fetchAndStoreTrack(trackId);
       if (is_head) {
-        await api('/cache-head', { trackId });
+        await reportCachedHead();
       }
     } catch (e) {
       showBubble('Network error while fetching audio.');
