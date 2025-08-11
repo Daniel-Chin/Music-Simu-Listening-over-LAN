@@ -122,6 +122,7 @@ app.post('/pair', (req, res) => {
     sse: false,
     cachedHeadTrackId: null,
   };
+  bumpEvent(rs);
   saveState(rooms);
   res.json({ clientId });
 });
@@ -216,10 +217,11 @@ app.post('/ping', (req, res) => {
       console.log(`Evicting stale client ${cid} from room ${room}`);
       delete rs.clients[cid];
       sseStreams.get(room)?.delete(cid);
-      pushSSE(room);
     }
   }
-
+  
+  bumpEvent(rs);
+  pushSSE(room);
   saveState(rooms);
   res.json({ ok: true });
 });
