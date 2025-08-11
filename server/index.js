@@ -46,6 +46,7 @@ const handleJoin = (req, res, next) => {
         lastPingSec: nowSec(), 
         cachedHeadTrackId: null, 
       }
+      console.log(`Hello, ${clientName}`);
     }
   }
   next();
@@ -110,6 +111,7 @@ const checkEventCount = (req, res, rs) => {
   const n = h ? parseInt(h, 10) : NaN;
   if (Number.isNaN(n) || n !== rs.eventCount) {
     res.status(409).json(fullSnapshot(rs));
+    console.log(`eventCount is ${rs.eventCount} but client thinks ${n}`);
     return false;
   }
   return true;
