@@ -181,3 +181,10 @@ input[type=range] {
     background: #0b1220;
     color: #ffffff
 }
+
+#qr-img {
+    width: 100%;
+    height: auto;
+    border-radius: 12px;
+    image-rendering: pixelated;
+}
