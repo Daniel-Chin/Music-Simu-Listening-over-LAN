@@ -74,14 +74,14 @@ Map: room code → room state. Keep only what we truly need.
             "wallTime": 69.69
         },
         "clients": {
-            "c1": { "name": "Alice", "lastPingSec": 1723320000, "sse": true, "cachedHeadTrackId": "t123" },
-            "c2": { "name": "Bob",   "lastPingSec": 1723320012, "sse": true, "cachedHeadTrackId": null }
+            "Alice": { "lastPingSec": 1723320000, "cachedHeadTrackId": "t123" },
+            "Bob": { "lastPingSec": 1723320012, "cachedHeadTrackId": null }
         }
     }
 }
 ```
 
-Runtime derived (not persisted or cheaply recomputed): active set = clients where `sse == true` AND `now - lastPingSec <= 6`.
+Runtime derived (not persisted or cheaply recomputed): active set = clients where `now - lastPingSec <= 6`.
 
 ### HTTP Endpoints
 
@@ -90,8 +90,6 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
     -   `GET /` → webpage of: the main UI. 
 -   **Discovery & Pairing**
     -   `GET /qr` `{room_code}` → png file of qr code of host url with room code param
-    -   `POST /pair` `{room_code, clientName}` →
-        `{clientId, eventCount, snapshot}`
 -   **Index & Metadata**
     -   `GET /index` → queue index
         `[ {trackId, fileName, size, mime, duration}, ... ]`
@@ -99,10 +97,10 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
 -   **Files**
     -   `GET /file/:trackId` → full file.
 -   **State & SSE**
-    -   `GET /snapshot` → full snapshot of state described above
+    -   `POST /snapshot` → full snapshot of state described above
     -   `GET /events` (SSE) → pushes on **state change only**:
         `{event, payload, eventCount}`
-    -   `POST /ping` `{clientId}` → updates `lastPingSec`; idempotent, no eventCount header, no SSE broadcast.
+    -   `POST /ping` `{clientName}` → updates `lastPingSec`
 -   **Control (all require `If-Match-Event: <eventCount>` header)**
     -   `POST /play` `{positionSec}` → start/resume
     -   `POST /pause`
@@ -117,7 +115,7 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
 warning and refreshes)
 
 ### Barrier & Activity Logic
-Each client publishes its *latest cached queue-head track id* via `POST /cache-head` and the server stores it as `clients[clientId].cachedHeadTrackId`.
+Each client publishes its *latest cached queue-head track id* via `POST /cache-head` and the server stores it as `clients[clientName].cachedHeadTrackId`.
 
 Simplify: barrier considers only *active* clients.
 
@@ -143,7 +141,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
 
 ### misc
 - Prints the landing page URL (192.168...) on startup.  
-- A song reaching its end is a server-initiated event. This is an exception to the "no live clock" principle. 
+- A song reaching its end is a client-initiated event.
 - Manage deps with npm.
   - express
   - music-metadata
@@ -213,9 +211,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
 ## Security & Pairing
 
 -   **Room code** six characters.
--   **Auth:** `POST /pair` validates code → issues hard-to-guess `clientId` (opaque
-    token in header) (instead of c1, c2).
--   The browser persistently stores clientId and client nickname. If these entries are not found when loading "/", go to "/landing".
+-   The browser persistently stores clientName. If these entries are not found when loading "/", go to "/landing".
 -   No PII.
 
 ------------------------------------------------------------------------

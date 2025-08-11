@@ -29,3 +29,6 @@ npm run dev
 - Server is HTTP-only; broadcast via SSE on state changes.
 - Covers are extracted if embedded art exists.
 - Dev-only endpoint: `/debug/state` dumps JSON.
+
+## todo
+- fix ping results in re-seek

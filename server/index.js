@@ -7,9 +7,8 @@ import { nanoid } from 'nanoid';
 import QRCode from 'qrcode';
 import mime from 'mime';
 
-import { PORT, AUDIO_DIR, STATE_FILE, ROOM_CODE_LENGTH, HEARTBEAT_SEC, DEV_MODE, EVENT_MODULO } from './config.js';
-import { loadState, saveState, newRoomState, bumpEvent, nowSec, activeClientIds, barrierSatisfied } from './state.js';
-import { buildPlaylistIndex, hashId } from './tracks.js';
+import { PORT, AUDIO_DIR, ROOM_CODE_LENGTH, HEARTBEAT_SEC, DEV_MODE } from './config.js';
+import { loadState, saveState, newRoomState, bumpEvent, nowSec, barrierSatisfied } from './state.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,7 +18,7 @@ app.use(express.json({ limit: '2mb' }));
 // in-memory live state (persisted on every accepted event)
 let playlist = [];
 let rooms = {};  // map room_code -> room state
-const sseStreams = new Map(); // room_code => Map(clientId => res)
+const sseStreams = new Map(); // room_code => Map(clientName => res)
 
 const boot = async () => {
   const loaded = await loadState();
@@ -36,26 +35,53 @@ const boot = async () => {
 // Helpers
 const randomRoomCode = () => nanoid(ROOM_CODE_LENGTH).toLowerCase().replace(/[^a-z0-9]/g,'');
 
-const advanceTime = (st) => {
-  if (st.playState.mode !== 'playing')
-    return;
-  const oldTime = st.playState.anchorPositionSec;
-  const elapsed = Date.now() / 1000 - (st.playState.wallTime || 0);
-  st.playState.anchorPositionSec = Math.max(0, oldTime + elapsed);
-  st.playState.wallTime = Date.now() / 1000;
-  return;
+const handleJoin = (req, res, next) => {
+  const {clientName, room} = req.body;
+  const rs = rooms[room];
+  if (clientName && rs) {
+    if (clientName in rs.clients) {
+      rs.clients[clientName].lastPingSec = nowSec();
+    } else {
+      rs.clients[clientName] = {
+        lastPingSec: nowSec(), 
+        cachedHeadTrackId: null, 
+      }
+    }
+  }
+  next();
 };
 
-const getRoom = (room_code) => {
-  const rs = rooms[room_code];
-  if (!rs) throw Object.assign(new Error('room not found'), { status: 404 });
-  return rs;
+app.use(handleJoin);
+
+const advanceTime = (req, res, next) => {
+  const room = req.body.room;
+  if (room) {
+    const rs = getRoomState(room, res);
+    if (rs.playState.mode === 'playing') {
+      const oldTime = rs.playState.anchorPositionSec;
+      const elapsed = Date.now() / 1000 - (rs.playState.wallTime || 0);
+      rs.playState.anchorPositionSec = Math.max(0, oldTime + elapsed);
+      rs.playState.wallTime = Date.now() / 1000;
+    }
+  }
+  next();
 };
 
-const pushSSE = (room_code) => {
+app.use(advanceTime);
+
+const getRoomState = (room_code, res) => {
+  if (!rooms[room_code]) {
+    res.status(404).send('room not found').end();
+    return null;
+  } else {
+    return rooms[room_code];
+  }
+};
+
+const pushSSE = (room_code, rs) => {
   const streams = sseStreams.get(room_code);
   if (!streams) return;
-  const snapshot = fullSnapshot(room_code);
+  const snapshot = fullSnapshot(rs);
   console.log(`Pushing SSE with eventCount ${snapshot.roomState.eventCount}`);
   for (const [cid, res] of streams.entries()) {
     try {
@@ -66,27 +92,24 @@ const pushSSE = (room_code) => {
   }
 };
 
-const fullSnapshot = (room_code) => {
-  const rs = getRoom(room_code);
+const fullSnapshot = (rs) => {
   return {
     roomState: rs,
     index: playlist,
   };
 };
 
-const acceptEvent = (room_code, mutate) => {
-  const rs = getRoom(room_code);
-  advanceTime(rs);
-  mutate(rs);
+const afterEvent = (room_code, rs) => {
   bumpEvent(rs);
   saveState(rooms);
-  pushSSE(room_code);
+  pushSSE(room_code, rs);
 };
 
-const requireMatchHeader = (req, rs) => {
+const checkEventCount = (req, res, rs) => {
   const h = req.get('If-Match-Event');
   const n = h ? parseInt(h, 10) : NaN;
   if (Number.isNaN(n) || n !== rs.eventCount) {
+    res.status(409).json(fullSnapshot(rs));
     return false;
   }
   return true;
@@ -108,23 +131,6 @@ app.get('/qr', async (req, res) => {
   const url = `${guessBaseURL(req)}/?room=${encodeURIComponent(room_code)}`;
   res.setHeader('Content-Type', 'image/png');
   res.send(await QRCode.toBuffer(url, { errorCorrectionLevel: 'M' }));
-});
-
-app.post('/pair', (req, res) => {
-  const { room_code, clientName } = req.body || {};
-  if (!rooms[room_code]) return res.status(404).json({ error: 'room not found' });
-  if (!clientName || String(clientName).length > 40) return res.status(400).json({ error: 'invalid name' });
-  const clientId = nanoid(10);
-  const rs = rooms[room_code];
-  rs.clients[clientId] = {
-    name: clientName,
-    lastPingSec: nowSec(),
-    sse: false,
-    cachedHeadTrackId: null,
-  };
-  bumpEvent(rs);
-  saveState(rooms);
-  res.json({ clientId });
 });
 
 // Index & Metadata
@@ -166,16 +172,16 @@ app.get('/file/:trackId', (req, res) => {
   stream.pipe(res);
 });
 
-// State & SSE
-app.get('/snapshot', (req, res) => {
-  const room = (req.query.room || '').toString();
-  if (!rooms[room]) return res.status(404).send('room not found');
-  res.json(fullSnapshot(room));
+app.post('/snapshot', (req, res) => {
+  const room = req.body.room;
+  const rs = getRoomState(room, res);
+  if (rs === null) return;
+  res.json(fullSnapshot(rs));
 });
 
 app.get('/events', (req, res) => {
   const room = (req.query.room || '').toString();
-  const clientId = (req.query.clientId || '').toString();
+  const clientName = (req.query.clientName || '').toString();
   if (!rooms[room]) return res.status(404).end();
   const rs = rooms[room];
 
@@ -185,18 +191,16 @@ app.get('/events', (req, res) => {
     Connection: 'keep-alive',
   });
   res.write('\n');
-  // mark SSE open
-  rs.clients[clientId] && (rs.clients[clientId].sse = true);
   if (!sseStreams.has(room)) sseStreams.set(room, new Map());
-  sseStreams.get(room).set(clientId, res);
+  sseStreams.get(room).set(clientName, res);
 
   req.on('close', () => {
     // SSE closed
-    rs.clients[clientId] && (rs.clients[clientId].sse = false);
-    sseStreams.get(room)?.delete(clientId);
+    sseStreams.get(room)?.delete(clientName);
     // Re-evaluate barrier (primary signal is SSE close)
     if (rs.playState?.mode === 'onBarrier' && barrierSatisfied(rs)) {
-      acceptEvent(room, (st) => { st.playState.mode = 'playing'; });
+      rs.playState.mode = 'playing';
+      afterEvent(room, rs);
     } else {
       saveState(rooms);
     }
@@ -204,10 +208,10 @@ app.get('/events', (req, res) => {
 });
 
 app.post('/ping', (req, res) => {
-  const { clientId, room } = req.body || {};
+  const { clientName, room } = req.body || {};
   if (!rooms[room]) return res.status(404).end();
   const rs = rooms[room];
-  const c = rs.clients[clientId];
+  const c = rs.clients[clientName];
   if (c) c.lastPingSec = nowSec();
 
   // Evict stale clients (no heartbeat in > 2 * HEARTBEAT_SEC)
@@ -220,121 +224,105 @@ app.post('/ping', (req, res) => {
     }
   }
   
-  bumpEvent(rs);
-  pushSSE(room);
-  saveState(rooms);
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
 // Control (requires If-Match-Event)
 app.post('/play', (req, res) => {
   const { room, positionSec } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
-  if (!requireMatchHeader(req, rs)) {
-    return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
-  }
-  acceptEvent(room, (st) => {
-    st.playState = {
-      mode: 'playing', 
-      anchorPositionSec: Math.max(0, Number(positionSec) || 0),
-      wallTime: Date.now() / 1000
-    };
-  });
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+  rs.playState = {
+    mode: 'playing', 
+    anchorPositionSec: Math.max(0, Number(positionSec) || 0),
+    wallTime: Date.now() / 1000
+  };
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
 app.post('/pause', (req, res) => {
   const { room } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
-  if (!requireMatchHeader(req, rs)) {
-    return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
-  }
-  acceptEvent(room, (st) => {
-    st.playState.mode = 'paused';
-  });
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+  rs.playState.mode = 'paused';
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
 app.post('/seek', (req, res) => {
   const { room, positionSec } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
-  if (!requireMatchHeader(req, rs)) {
-    return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
-  }
-  acceptEvent(room, (st) => {
-    st.playState.anchorPositionSec = Math.max(0, Number(positionSec) || 0);
-  });
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+  rs.playState.anchorPositionSec = Math.max(0, Number(positionSec) || 0);
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
+const rotateQueue = (is_next_not_prev) => {
+  if (is_next_not_prev) {
+    const head = rs.queue.shift();
+    rs.queue.push(head);
+  } else {
+    const tail = st.queue.pop();
+    st.queue.unshift(tail);
+  }
+  rs.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
+  // null all cached markers (clients must re-assert for new head)
+  for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
+};
+
 app.post('/next', (req, res) => {
   const { room } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
-  if (!requireMatchHeader(req, rs)) {
-    return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
-  }
-  acceptEvent(room, (st) => {
-    // move head to tail (circular queue), reset playState to onBarrier
-    const head = st.queue.shift();
-    st.queue.push(head);
-    st.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
-    // null all cached markers (clients must re-assert for new head)
-    for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
-  });
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+
+  rotateQueue(true);
+
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
 app.post('/prev', (req, res) => {
   const { room } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
-  if (!requireMatchHeader(req, rs)) {
-    return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
-  }
-  acceptEvent(room, (st) => {
-    const tail = st.queue.pop();
-    st.queue.unshift(tail);
-    st.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
-    for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
-  });
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+
+  rotateQueue(false);
+
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
 app.post('/nudge', (req, res) => {
   const { room, trackId } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
-  if (!requireMatchHeader(req, rs)) {
-    return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+
+  const idx = rs.queue.indexOf(trackId);
+  if (idx > 0) {
+    rs.queue.splice(idx, 1);
+    rs.queue.splice(1, 0, trackId); // next-up
   }
-  acceptEvent(room, (st) => {
-    const idx = st.queue.indexOf(trackId);
-    if (idx > 0) {
-      st.queue.splice(idx, 1);
-      st.queue.splice(1, 0, trackId); // next-up
-    }
-  });
+
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
 app.post('/cache-head', (req, res) => {
-  const { room, clientId, trackId } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
-  const head = rs.queue[0];
-  if (trackId !== head) return res.status(400).json({ error: 'trackId must equal current head' });
-  const c = rs.clients[clientId];
-  if (!c) return res.status(404).json({ error: 'client not found' });
+  const { room, clientName, trackId } = req.body || {};
+  const rs = getRoomState(room, res);
+
+  const c = rs.clients[clientName];
+  if (!c) return res.status(404).json({ error: `client ${clientName} not found` });
   c.cachedHeadTrackId = trackId;
-  saveState(rooms);
+  
   // Evaluate barrier, and if satisfied and currently onBarrier, release
   if (rs.playState?.mode === 'onBarrier' && barrierSatisfied(rs)) {
-    acceptEvent(room, (st) => { st.playState.mode = 'playing'; });
+    rs.playState.mode = 'playing';
   }
+  afterEvent(room, rs);
   res.json({ ok: true });
 });
 
@@ -345,7 +333,6 @@ app.get('/debug/state', (req, res) => {
   res.end(JSON.stringify(rooms, null, 2));
 });
 
-// Cover / client static
 app.use('/static', express.static(path.join(__dirname, '../client/public')));
 
 app.get('/favicon.ico', (req, res) => {

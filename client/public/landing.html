@@ -33,17 +33,6 @@
       const room_code = roomEl.value.trim().toLowerCase();
       const clientName = nameEl.value.trim();
       if (!room_code || !clientName) return;
-      const r = await fetch('/pair', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room_code, clientName }),
-      });
-      if (!r.ok) {
-        alert('Pair failed');
-        return;
-      }
-      const data = await r.json();
-      localStorage.setItem('clientId', data.clientId);
       localStorage.setItem('clientName', clientName);
       localStorage.setItem('room', room_code);
       location.href = '/?room=' + encodeURIComponent(room_code);

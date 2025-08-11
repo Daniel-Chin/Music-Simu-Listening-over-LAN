@@ -1,9 +1,8 @@
 // SPA client: tabs, SSE, caching, queue, controls
 const qs = new URLSearchParams(location.search);
 const room = qs.get('room') || localStorage.getItem('room') || '';
-const clientId = localStorage.getItem('clientId') || '';
 const clientName = localStorage.getItem('clientName') || '';
-if (!room || !clientId) location.href = '/landing?room=' + encodeURIComponent(room || '');
+if (!room || !clientName) location.href = '/landing?room=' + encodeURIComponent(room || '');
 
 const serverState = {
   roomState: null,
@@ -37,7 +36,8 @@ const els = {
 };
 
 els.roomLabel.textContent = room;
-els.shareUrl.textContent = location.origin + '/?room=' + room;
+els.shareUrl.href = location.origin + '/?room=' + room;
+els.shareUrl.textContent = els.shareUrl.href;
 els.qrImg.src = '/qr?room_code=' + encodeURIComponent(room);
 els.roomCode.textContent = 'Code: ' + room;
 
@@ -65,14 +65,22 @@ const showBubble = (msg) => {
 const findIndexItem = (trackId) => serverState.index.find(x => x.trackId === trackId) || null;
 
 // Networking primitives
-const api = async (path, body, requireEventHeader=false) => {
+const api = async (path, extraBody={}, requireEventHeader=false) => {
   const headers = { 'Content-Type': 'application/json' };
   if (requireEventHeader) headers['If-Match-Event'] = String(serverState.roomState.eventCount);
-  const r = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
+  const r = await fetch(path, { method: 'POST', headers, body: JSON.stringify({
+    room,
+    clientName,
+    ...extraBody,
+  }) });
   if (r.status === 409) {
     const snapshot = await r.json();
     applySnapshot(snapshot);
     showBubble('Out-of-sync; refreshed.');
+    return null;
+  }
+  if (r.status === 404) {
+    alert(`Yo, 404. ${await r.text()}`);
     return null;
   }
   return await r.json();
@@ -101,7 +109,7 @@ const applySnapshot = (snap) => {
 const connectSSE = () => {
   const url = new URL('/events', location.origin);
   url.searchParams.set('room', room);
-  url.searchParams.set('clientId', clientId);
+  url.searchParams.set('clientName', clientName);
   const es = new EventSource(url.toString());
   es.onmessage = (e) => {
     try {
@@ -119,16 +127,11 @@ const connectSSE = () => {
 
 // Ping heartbeat
 setInterval(() => {
-  fetch('/ping', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ clientId, room }),
-  }).catch(()=>{});
+  api('/ping').catch(()=>{});
 }, 3000);
 
 // Initial snapshot
-fetch('/snapshot?room=' + encodeURIComponent(room))
-  .then(r => r.json())
+api('/snapshot')
   .then(applySnapshot)
   .then(connectSSE);
 
@@ -136,16 +139,18 @@ fetch('/snapshot?room=' + encodeURIComponent(room))
 els.playPauseBtn.addEventListener('click', async () => {
   const pos = els.audio.currentTime || 0;
   if (serverState.roomState.playState.mode === 'playing') {
-    await api('/pause', { room }, true);
+    els.audio.pause();
+    await api('/pause', {}, true);
   } else {
-    await api('/play', { room, positionSec: pos }, true);
+    // don't play, wait for server
+    await api('/play', { positionSec: pos }, true);
   }
 });
 els.nextBtn.addEventListener('click', async () => {
-  await api('/next', { room }, true);
+  await api('/next', {}, true);
 });
 els.prevBtn.addEventListener('click', async () => {
-  await api('/prev', { room }, true);
+  await api('/prev', {}, true);
 });
 els.seek.addEventListener('input', (e) => {
   const dur = Math.max(1, els.audio.duration || 1);
@@ -155,7 +160,7 @@ els.seek.addEventListener('input', (e) => {
 });
 els.seek.addEventListener('change', async () => {
   const pos = els.audio.currentTime || 0;
-  await api('/seek', { room, positionSec: pos }, true);
+  await api('/seek', { positionSec: pos }, true);
 });
 
 // Rendering
@@ -220,7 +225,7 @@ const renderQueue = () => {
     btn.textContent = 'Play next';
     btn.disabled = i === 0;
     btn.addEventListener('click', async () => {
-      await api('/nudge', { room, trackId }, true);
+      await api('/nudge', { trackId }, true);
     });
     li.appendChild(btn);
     els.queueList.appendChild(li);
@@ -400,11 +405,14 @@ const fetchAndStoreTrack = async (trackId) => {
   return blob;
 };
 
-const getTrackBlobURL = async (trackId) => {
+const getTrackBlobURL = async (trackId, is_head) => {
   let blob = await idbGet(trackId);
   if (!blob) {
     try {
       blob = await fetchAndStoreTrack(trackId);
+      if (is_head) {
+        await api('/cache-head', { trackId });
+      }
     } catch (e) {
       showBubble('Network error while fetching audio.');
       throw e;
@@ -446,7 +454,7 @@ const maybePrefetchHeadAndNext = async () => {
     const next = serverState.roomState.queue[1];
     if (!head) return;
     // Build blob URL for head
-    const headURL = await getTrackBlobURL(head);
+    const headURL = await getTrackBlobURL(head, true);
     if (els.audio.src !== headURL) {
       els.audio.src = headURL;
     }
@@ -459,16 +467,9 @@ const maybePrefetchHeadAndNext = async () => {
       tmp.onloadedmetadata = () => { /* metadata learned implicitly */ };
     }
 
-    // When finished caching head, assert cache-head
-    await fetch('/cache-head', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ room, clientId, trackId: head }),
-    });
-
     // Pre-fetch next
     if (next) {
-      await getTrackBlobURL(next);
+      await getTrackBlobURL(next, false);
     }
     await evictIfNeeded();
   } catch (e) {
@@ -477,6 +478,7 @@ const maybePrefetchHeadAndNext = async () => {
 };
 
 els.audio.addEventListener('ended', async () => {
+  await api('/next', {}, true);
 });
 
 // Keep seek bar in sync
