@@ -142,6 +142,12 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
 ### misc
 - Prints the landing page URL (192.168...) on startup.  
 - A song reaching its end is a server-initiated event. This is an exception to the "no live clock" principle. 
+- Manage deps with npm.
+  - express
+  - music-metadata
+  - mime
+  - nanoid
+  - qrcode
 
 ------------------------------------------------------------------------
 
