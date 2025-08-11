@@ -93,8 +93,10 @@ const connectSSE = () => {
   url.searchParams.set('clientId', clientId);
   const es = new EventSource(url.toString());
   es.onmessage = (e) => {
+    console.log('SSE event with eventCount:');
     try {
       const { event, payload, eventCount } = JSON.parse(e.data);
+      console.log(eventCount);
       if (event === 'state' && payload) {
         applySnapshot(payload);
       }

@@ -45,6 +45,7 @@ const getRoom = (room_code) => {
 const pushSSE = (room_code, evt) => {
   const streams = sseStreams.get(room_code);
   if (!streams) return;
+  console.log(`Pushing SSE with eventCount ${evt.eventCount}`);
   for (const [cid, res] of streams.entries()) {
     try {
       res.write(`data: ${JSON.stringify(evt)}\n\n`);
