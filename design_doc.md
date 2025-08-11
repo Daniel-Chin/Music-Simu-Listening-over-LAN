@@ -184,7 +184,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
 
 -   **Policy:** pin **current + next + last 3 played** (5 total).
 -   **Budget:** use `navigator.storage.estimate()`; on overflow, evict
-    LRU (never evict current/next).
+    LRU (never evict current/next). For insecure HTTP, skip this.
 -   **Flow per track:**
     1)  `GET /file/:trackId` (full) → put into IndexedDB.  
     2)  create Blob URL for `<audio>` source,

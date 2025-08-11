@@ -287,7 +287,9 @@ const buildBlobURLForTrack = async (trackId) => {
 
 const evictIfNeeded = async () => {
   try {
-    const est = await navigator.storage.estimate();
+    // Skip eviction entirely if unsupported
+    if (!(navigator.storage && navigator.storage.estimate)) return;
+    const est = await safeStorageEstimate();
     const used = est.usage || 0;
     const quota = est.quota || 0;
     if (quota && used / quota < 0.9) return; // within budget
@@ -297,7 +299,7 @@ const evictIfNeeded = async () => {
       if (!protect.has(k)) {
         await idbDelete(k);
         state.cachedSet.delete(k);
-        const est2 = await navigator.storage.estimate();
+        const est2 = await safeStorageEstimate();
         if ((est2.usage || 0) / (est2.quota || 1) < 0.9) break;
       }
     }
@@ -373,3 +375,13 @@ setInterval(() => {
   if (dur > 0) els.seek.value = String(Math.round(cur / dur * 100));
   renderStatus();
 }, 500);
+
+// Safe storage estimate helper (handles browsers without navigator.storage)
+const safeStorageEstimate = async () => {
+  if (navigator.storage && typeof navigator.storage.estimate === 'function') {
+    try {
+      return await navigator.storage.estimate();
+    } catch {}
+  }
+  return { usage: 0, quota: 0 };
+};
