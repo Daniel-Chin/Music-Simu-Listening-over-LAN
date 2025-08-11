@@ -78,15 +78,6 @@ h1 {
     margin: 12px 0
 }
 
-.controls button {
-    font-size: 18px;
-    padding: 8px 12px;
-    border-radius: 10px;
-    border: 1px solid #374151;
-    background: #111827;
-    color: #e5e7eb
-}
-
 input[type=range] {
     width: 100%
 }
@@ -105,14 +96,6 @@ input[type=range] {
     flex: 1;
     padding: 10px;
     border-radius: 999px;
-    border: 1px solid #334155;
-    background: #0b1220;
-    color: #cbd5e1
-}
-
-.tabs button.active {
-    background: #1e293b;
-    color: #fff
 }
 
 .tab {
@@ -144,9 +127,6 @@ input[type=range] {
 }
 
 #queue-list button {
-    border: 1px solid #334155;
-    background: #0b1220;
-    color: #cbd5e1;
     border-radius: 999px;
     padding: 6px 10px
 }
@@ -207,16 +187,33 @@ input[type=range] {
 .controls {
     display: flex;
     justify-content: center; /* center horizontally */
-    gap: 1rem;               /* space between buttons */
+    gap: 12px;               /* space between buttons */
     padding: 1rem;
 }
 
 .controls > button {
     font-size: 36px;
-    margin-left: 12px;
-    margin-right: 12px;
 }
 
 a {
     color: #4499ff;
+}
+
+button {
+    margin-left: 12px;
+    margin-right: 12px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid #374151;
+    background: #111827;
+    color: #e5e7eb
+}
+button.active {
+    background: #1e293b;
+    color: #fff
+}
+
+#changeNameBtn {
+    margin-top: 12px;
+    margin-bottom: 12px;
 }
