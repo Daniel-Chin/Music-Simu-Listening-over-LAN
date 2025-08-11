@@ -213,6 +213,17 @@ const renderStatus = () => {
   } else {
     els.statusLine.textContent = `paused at ${Math.round(state.playState.anchorPositionSec)}s`;
   }
+  switch (state.playState.mode) {
+    case 'playing':
+      playPauseBtn.textContent = '⏸️';
+      break;
+    case 'paused':
+      playPauseBtn.textContent = '▶️';
+      break;
+    case 'onBarrier':
+      playPauseBtn.textContent = '...';
+      break;
+  }
 };
 
 // Audio & caching (IndexedDB instead of Cache Storage)
