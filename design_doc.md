@@ -86,6 +86,7 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
     -   `GET /landing` → webpage of: two input fields (room_code, name). Room code is auto-filled if in URL params. Name is autofilled according to persistent storage.
     -   `GET /` → webpage of: the main UI. 
 -   **Discovery & Pairing**
+    -   `GET /qr` `{room_code}` → png file of qr code of host url with room code param
     -   `POST /pair` `{room_code, clientName}` →
         `{clientId, eventCount, snapshot}`
 -   **Index & Metadata**
