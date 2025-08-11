@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover'>
+  <title>Simu‑Listening</title>
+  <link rel='stylesheet' href='/static/styles.css'>
+</head>
+<body>
+  <div id='app'>
+    <header>
+      <h1>Simu‑Listening</h1>
+      <div class='room'>Room: <span id='room-label'></span></div>
+    </header>
+
+    <main>
+      <div class='player'>
+        <div class='meta'>
+          <img id='cover' alt='cover'>
+          <div class='text'>
+            <div id='title'>—</div>
+            <div id='artist'>—</div>
+          </div>
+        </div>
+        <audio id='audio' preload='metadata' playsinline></audio>
+        <div class='controls'>
+          <button id='prevBtn'>⏮</button>
+          <button id='playPauseBtn'>▶️/⏸️</button>
+          <button id='nextBtn'>⏭</button>
+        </div>
+        <input type='range' id='seek' min='0' max='100' value='0'>
+        <div id='statusLine'>—</div>
+      </div>
+
+      <nav class='tabs'>
+        <button data-tab='current' class='active'>Current Song</button>
+        <button data-tab='queue'>Queue</button>
+        <button data-tab='sharing'>Sharing</button>
+      </nav>
+
+      <section id='tab-current' class='tab active'>
+        <div id='current-info'></div>
+      </section>
+
+      <section id='tab-queue' class='tab'>
+        <ul id='queue-list'></ul>
+      </section>
+
+      <section id='tab-sharing' class='tab'>
+        <div id='share-url'></div>
+        <img id='qr-img' alt='QR'>
+        <div id='room-code'></div>
+      </section>
+    </main>
+
+    <div id='bubble' class='bubble hidden'></div>
+  </div>
+
+  <script src='/static/app.js'></script>
+</body>
+</html>

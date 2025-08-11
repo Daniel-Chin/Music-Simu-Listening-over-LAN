@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang='en'>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover'>
+  <title>Join room</title>
+  <link rel='stylesheet' href='/static/styles.css'>
+</head>
+<body>
+  <div class='landing'>
+    <h1>Join Simu‑Listening</h1>
+    <form id='join-form'>
+      <label>Room code
+        <input id='room-input' maxlength='6' required>
+      </label>
+      <label>Name
+        <input id='name-input' maxlength='40' required>
+      </label>
+      <button type='submit'>Join</button>
+    </form>
+  </div>
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const roomParam = qs.get('room') || '';
+    const roomEl = document.getElementById('room-input');
+    roomEl.value = roomParam;
+
+    const nameEl = document.getElementById('name-input');
+    nameEl.value = localStorage.getItem('clientName') || '';
+
+    document.getElementById('join-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const room_code = roomEl.value.trim().toLowerCase();
+      const clientName = nameEl.value.trim();
+      if (!room_code || !clientName) return;
+      const r = await fetch('/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room_code, clientName }),
+      });
+      if (!r.ok) {
+        alert('Pair failed');
+        return;
+      }
+      const data = await r.json();
+      localStorage.setItem('clientId', data.clientId);
+      localStorage.setItem('clientName', clientName);
+      localStorage.setItem('room', room_code);
+      location.href = '/?room=' + encodeURIComponent(room_code);
+    });
+  </script>
+</body>
+</html>

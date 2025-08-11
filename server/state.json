@@ -1,0 +1,68 @@
+{
+  "fqqdgj": {
+    "eventCount": 13,
+    "queue": [
+      "t41w08c",
+      "t2vjvfs",
+      "tz1pztj",
+      "t11n1dy1",
+      "tdvel0u",
+      "t7inpm5",
+      "t127ijz1",
+      "tseves7",
+      "t1hjz82z",
+      "tzwrx94",
+      "t5g9oyx",
+      "ta4tswy",
+      "t1dqtldx",
+      "tk1mjzd",
+      "t17ulefj",
+      "tyz6qp8",
+      "t1oc665q",
+      "t1nkd68m",
+      "t4di98g",
+      "tfh1zv3",
+      "t1vnapgj",
+      "t5z7dgd",
+      "t1is902j",
+      "ts52kdu",
+      "tbdo4as",
+      "t1y6pw8z",
+      "t1njzwbh",
+      "t1s6uvws",
+      "tqzdcxh",
+      "t16148ip",
+      "t111xn4k",
+      "t6p9xmu",
+      "tr563z",
+      "tqy5jhf",
+      "t1uoren6",
+      "tqdqbcu",
+      "t3jhwz2",
+      "t1dhzmvp",
+      "t109eigo",
+      "ty6cmne",
+      "t2ykomw",
+      "t8nhe5s",
+      "tb0ldtx",
+      "tnzq7ho",
+      "t1drbajo",
+      "t1n6ccrb",
+      "t1hfjp7k",
+      "tt316ha",
+      "t1n3if3k"
+    ],
+    "playState": {
+      "mode": "paused",
+      "anchorPositionSec": 0.12
+    },
+    "clients": {
+      "Wk1WL377G4": {
+        "name": "dan",
+        "lastPingSec": 1754874323,
+        "sse": true,
+        "cachedHeadTrackId": null
+      }
+    }
+  }
+}
