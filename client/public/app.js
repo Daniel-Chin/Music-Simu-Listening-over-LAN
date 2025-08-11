@@ -35,6 +35,7 @@ const els = {
   shareUrl: document.getElementById('share-url'),
   qrImg: document.getElementById('qr-img'),
   roomCode: document.getElementById('room-code'),
+  membersList: document.getElementById('members-list'), // NEW
 };
 
 els.roomLabel.textContent = room;
@@ -175,6 +176,30 @@ const render = () => {
   }
   renderQueue();
   renderStatus();
+  renderMembers();
+};
+
+const renderMembers = () => {
+  if (!els.membersList) return;
+  els.membersList.innerHTML = '';
+  const clients = Object.entries((state.snapshot && state.snapshot.clients) || {});
+  const nowSec = Date.now() / 1000;
+  const head = state.queue[0];
+  clients
+    .sort((a,b)=>a[0].localeCompare(b[0]))
+    .forEach(([cid, c]) => {
+      const li = document.createElement('li');
+      const online = (nowSec - (c.lastPingSec || 0)) <= 6;
+      const ready = online && c.cachedHeadTrackId === head;
+      const parts = [];
+      if (c.name) parts.push(c.name); // show name if supplied
+      parts.push(`(${cid.slice(0,4)})`);
+      parts.push(online ? '🟢' : '⚪');
+      if (ready) parts.push('[ready]');
+      if (state.playState.mode === 'onBarrier' && online && !ready) parts.push('[downloading]');
+      li.textContent = parts.join(' ');
+      els.membersList.appendChild(li);
+    });
 };
 
 const renderQueue = () => {
