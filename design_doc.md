@@ -69,7 +69,10 @@ Map: room code → room state. Keep only what we truly need.
     "rb9ro3": {
         "eventCount": 42,
         "queue": ["<trackId>", "..."] ,
-        "playState": { "mode": "playing|paused|onBarrier", "anchorPositionSec": 0 },
+        "playState": { 
+            "mode": "playing|paused|onBarrier", "anchorPositionSec": 0,
+            "wallTime": 69.69
+        },
         "clients": {
             "c1": { "name": "Alice", "lastPingSec": 1723320000, "sse": true, "cachedHeadTrackId": "t123" },
             "c2": { "name": "Bob",   "lastPingSec": 1723320012, "sse": true, "cachedHeadTrackId": null }
@@ -102,7 +105,7 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
     -   `POST /ping` `{clientId}` → updates `lastPingSec`; idempotent, no eventCount header, no SSE broadcast.
 -   **Control (all require `If-Match-Event: <eventCount>` header)**
     -   `POST /play` `{positionSec}` → start/resume
-    -   `POST /pause` `{positionSec}`
+    -   `POST /pause`
     -   `POST /seek` `{positionSec}` (no barrier; sets new anchor)
     -   `POST /next` `{}`
     -   `POST /prev` `{}`

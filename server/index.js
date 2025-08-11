@@ -36,6 +36,16 @@ const boot = async () => {
 // Helpers
 const randomRoomCode = () => nanoid(ROOM_CODE_LENGTH).toLowerCase().replace(/[^a-z0-9]/g,'');
 
+const advanceTime = (st) => {
+  if (st.playState.mode !== 'playing')
+    return;
+  const oldTime = st.playState.anchorPositionSec;
+  const elapsed = Date.now() / 1000 - (st.playState.wallTime || 0);
+  st.playState.anchorPositionSec = Math.max(0, oldTime + elapsed);
+  st.playState.wallTime = Date.now() / 1000;
+  return;
+};
+
 const getRoom = (room_code) => {
   const rs = rooms[room_code];
   if (!rs) throw Object.assign(new Error('room not found'), { status: 404 });
@@ -69,6 +79,7 @@ const fullSnapshot = (room_code) => {
 
 const acceptEvent = (room_code, mutate) => {
   const rs = getRoom(room_code);
+  advanceTime(rs);
   mutate(rs);
   bumpEvent(rs);
   saveState(rooms);
@@ -213,20 +224,24 @@ app.post('/play', (req, res) => {
     return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
   }
   acceptEvent(room, (st) => {
-    st.playState = { mode: 'playing', anchorPositionSec: Math.max(0, Number(positionSec) || 0) };
+    st.playState = {
+      mode: 'playing', 
+      anchorPositionSec: Math.max(0, Number(positionSec) || 0),
+      wallTime: Date.now() / 1000
+    };
   });
   res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
 });
 
 app.post('/pause', (req, res) => {
-  const { room, positionSec } = req.body || {};
+  const { room } = req.body || {};
   if (!rooms[room]) return res.status(404).end();
   const rs = rooms[room];
   if (!requireMatchHeader(req, rs)) {
     return res.status(409).json({ expectedEventCount: rs.eventCount, snapshot: fullSnapshot(room) });
   }
   acceptEvent(room, (st) => {
-    st.playState = { mode: 'paused', anchorPositionSec: Math.max(0, Number(positionSec) || 0) };
+    st.playState.mode = 'paused';
   });
   res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
 });
@@ -255,7 +270,7 @@ app.post('/next', (req, res) => {
     // move head to tail (circular queue), reset playState to onBarrier
     const head = st.queue.shift();
     st.queue.push(head);
-    st.playState = { mode: 'onBarrier', anchorPositionSec: 0 };
+    st.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
     // null all cached markers (clients must re-assert for new head)
     for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
   });
@@ -272,7 +287,7 @@ app.post('/prev', (req, res) => {
   acceptEvent(room, (st) => {
     const tail = st.queue.pop();
     st.queue.unshift(tail);
-    st.playState = { mode: 'onBarrier', anchorPositionSec: 0 };
+    st.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
     for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
   });
   res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });

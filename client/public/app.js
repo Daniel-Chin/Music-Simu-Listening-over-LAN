@@ -10,7 +10,7 @@ const state = {
   snapshot: null,
   index: [],
   queue: [],
-  playState: { mode: 'paused', anchorPositionSec: 0 },
+  playState: { mode: 'paused', anchorPositionSec: 0, wallTime: 0 },
   headBlobURL: null,
   nextBlobURL: null,
   currentTrackId: null,
@@ -93,10 +93,9 @@ const connectSSE = () => {
   url.searchParams.set('clientId', clientId);
   const es = new EventSource(url.toString());
   es.onmessage = (e) => {
-    console.log('SSE event with eventCount:');
     try {
       const { event, payload, eventCount } = JSON.parse(e.data);
-      console.log(eventCount);
+      console.log(`SSE event [${eventCount}]`);
       if (event === 'state' && payload) {
         applySnapshot(payload);
       }
@@ -126,7 +125,7 @@ fetch('/snapshot?room=' + encodeURIComponent(room))
 els.playPauseBtn.addEventListener('click', async () => {
   const pos = els.audio.currentTime || 0;
   if (state.playState.mode === 'playing') {
-    const r = await api('/pause', { room, positionSec: pos }, true);
+    const r = await api('/pause', { room }, true);
     if (r) applySnapshot(r.snapshot);
   } else {
     const r = await api('/play', { room, positionSec: pos }, true);
@@ -203,10 +202,14 @@ const renderStatus = () => {
   const head = state.queue[0];
   const readyCount = Object.values(state.snapshot.clients || {}).filter(c => c.sse && c.cachedHeadTrackId === head && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
   if (state.playState.mode === 'onBarrier') {
-    els.statusLine.textContent = `waiting for others to download (${readyCount}/${activeCount} ready)`;
+    const haveHead = head && state.cachedSet.has(head) && !!state.headBlobURL;
+    if (haveHead) {
+      els.statusLine.textContent = `waiting for others to download... (${readyCount}/${activeCount} ready)`;
+    } else {
+      els.statusLine.textContent = 'downloading...';
+    }
   } else if (state.playState.mode === 'playing') {
-    const pct = els.audio.duration ? Math.round(els.audio.currentTime / els.audio.duration * 100) : 0;
-    els.statusLine.textContent = `playing… ${pct}%`;
+    els.statusLine.textContent = `playing at ${Math.round(els.audio.currentTime)}s`;
   } else {
     els.statusLine.textContent = `paused at ${Math.round(state.playState.anchorPositionSec)}s`;
   }
