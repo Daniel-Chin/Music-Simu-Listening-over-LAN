@@ -211,7 +211,7 @@ const renderQueue = () => {
     left.textContent = `${i===0?'▶ ':'  '}${(it?.title)||'Unknown'} · ${(it?.artist)||''} · ${(it?.duration||0).toFixed(0)}s`;
     li.appendChild(left);
     const btn = document.createElement('button');
-    btn.textContent = 'Nudge next-up';
+    btn.textContent = 'Play next';
     btn.disabled = i === 0;
     btn.addEventListener('click', async () => {
       const r = await api('/nudge', { room, trackId }, true);
