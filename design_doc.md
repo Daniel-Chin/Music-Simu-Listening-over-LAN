@@ -27,8 +27,8 @@ Prioritize simplicity of the implementation.
 -   **Client (HTML+JS, mobile‑first):**
     -   Single‑page app with **three tabs**: *Current Song*, *Queue*, *Sharing*.
     -   `<audio>` element playback from **Blob URLs**.
-    -   Uses **Cache Storage API** for whole‑file caching; **IndexedDB**
-        for light metadata.
+    -   Uses **IndexedDB**
+        for whole‑file caching.
     -   Discovers server via QR (URL) + short random code (pairing).
 
 ------------------------------------------------------------------------
@@ -186,7 +186,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
 -   **Budget:** use `navigator.storage.estimate()`; on overflow, evict
     LRU (never evict current/next).
 -   **Flow per track:**
-    1)  `GET /file/:trackId` (full) → put into `caches.open('audio')`,
+    1)  `GET /file/:trackId` (full) → put into IndexedDB.  
     2)  create Blob URL for `<audio>` source,
     3)  on `ended`, rotate queue; prefetch next.
 -   **Nudge effect:** immediately trigger (re)prefetch of new next‑up.
