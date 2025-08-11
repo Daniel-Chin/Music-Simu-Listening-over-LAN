@@ -129,7 +129,6 @@ app.get('/', (req, res) => {
 // Discovery & Pairing
 app.get('/qr', async (req, res) => {
   const room_code = (req.query.room_code || '').toString();
-  if (!rooms[room_code]) return res.status(404).send('room not found');
   const url = `${guessBaseURL(req)}/?room=${encodeURIComponent(room_code)}`;
   res.setHeader('Content-Type', 'image/png');
   res.send(await QRCode.toBuffer(url, { errorCorrectionLevel: 'M' }));
@@ -143,7 +142,7 @@ app.get('/index', (req, res) => {
 app.get('/cover/:trackId', async (req, res) => {
   const { trackId } = req.params;
   const item = playlist.find(t => t.trackId === trackId);
-  if (!item) return res.status(404).send('not found');
+  if (!item) return res.status(404).send('track not found');
   // Use music-metadata to extract picture if any
   try {
     const file = path.join(AUDIO_DIR, item.fileName);
@@ -166,7 +165,7 @@ app.get('/cover/:trackId', async (req, res) => {
 app.get('/file/:trackId', (req, res) => {
   const { trackId } = req.params;
   const item = playlist.find(t => t.trackId === trackId);
-  if (!item) return res.status(404).send('not found');
+  if (!item) return res.status(404).send('track not found');
   const fpath = path.join(AUDIO_DIR, item.fileName);
   const type = item.mime || mime.getType(fpath) || 'application/octet-stream';
   res.setHeader('Content-Type', type);
@@ -184,8 +183,11 @@ app.post('/snapshot', (req, res) => {
 app.get('/events', (req, res) => {
   const room = (req.query.room || '').toString();
   const clientName = (req.query.clientName || '').toString();
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
+  const rs = getRoomState(room, res);
+  if (rs === null) {
+    console.log('Terminating event stream because room is not found');
+    return;
+  }
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -211,8 +213,7 @@ app.get('/events', (req, res) => {
 
 app.post('/ping', (req, res) => {
   const { clientName, room } = req.body || {};
-  if (!rooms[room]) return res.status(404).end();
-  const rs = rooms[room];
+  const rs = getRoomState(room, res);
   const c = rs.clients[clientName];
   if (c) c.lastPingSec = nowSec();
 
@@ -330,7 +331,7 @@ app.post('/cache-head', (req, res) => {
 
 // Debug (dev-only)
 app.get('/debug/state', (req, res) => {
-  if (!DEV_MODE) return res.status(404).end();
+  if (!DEV_MODE) return res.status(403).end();
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(rooms, null, 2));
 });

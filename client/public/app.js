@@ -1,4 +1,6 @@
 // SPA client: tabs, SSE, caching, queue, controls
+const LRU_SIZE = 3;
+
 const qs = new URLSearchParams(location.search);
 const room = qs.get('room') || localStorage.getItem('room') || '';
 const clientName = localStorage.getItem('clientName') || '';
@@ -11,7 +13,7 @@ const serverState = {
 };
 const localState = {
   cacheRegistry: {},     // from trackId to blobURL
-  recentLRU: [],         // last 3 played
+  recentLRU: [],         // last n played
 };
 
 const els = {
@@ -97,10 +99,10 @@ const applySnapshot = (snap) => {
   serverState.roomState = snap.roomState;
   serverState.index = snap.index.slice();
   if (head_change) {
-    reportCachedHead().catch(console.error);
+    reportCachedHead();
   }
   render();
-  maybePrefetchHeadAndNext().catch(console.error);
+  maybePrefetchHeadAndNext();
   // Apply play/paused state anchor
   const playState = serverState.roomState.playState;
   const desiredPos = playState.anchorPositionSec || 0;
@@ -280,131 +282,77 @@ const renderStatus = () => {
   }
 };
 
-// Audio & caching (IndexedDB instead of Cache Storage)
 // DB schema: db 'audio', objectStore 'tracks' (key = trackId, value = Blob)
-// We keep LRU-ish set via localState.recentLRU plus protect current head & next.
-const pinPolicyMax = 5; // current + next + last 3
 
-const fatalIDB = (err) => {
-  console.error('FATAL IndexedDB error – cannot proceed with caching', err);
-  showBubble('Fatal cache error; reload page.');
-  throw err instanceof Error ? err : new Error(String(err));
+let db = null;
+
+const ensureDB = async () => {
+  if (db)
+    return;
+  const req = indexedDB.open('audio', 1);
+  await new Promise((resolve, reject) => {
+    req.onupgradeneeded = () => {
+      const newDb = req.result;
+      newDb.createObjectStore('tracks');
+    };
+    req.onsuccess = () => {
+      db = req.result;
+      resolve();
+    };
+    req.onerror = () => {
+      reject(`ensureDB ${req.error}`);
+    };
+  });
 };
 
-const getDB = (() => {
-  let p;
-  const open = () => new Promise((resolve, reject) => {
-    try {
-      const req = indexedDB.open('audio', 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks');
-      };
-      req.onsuccess = () => {
-        const db = req.result;
-        db.onversionchange = () => {
-          try { db.close(); } catch {}
-          p = undefined; // force reopen on next access
-        };
-        resolve(db);
-      };
-      req.onerror = () => reject(req.error);
-      req.onblocked = () => console.warn('IndexedDB open blocked.');
-    } catch (e) {
-      reject(e);
-    }
-  });
-  return async (force=false) => {
-    if (force) p = undefined;
-    if (!p) p = open();
-    return p;
-  };
-})();
-
 const idbGet = async (trackId) => {
-  const db = await getDB().catch(fatalIDB);
+  await ensureDB();
   return await new Promise((res, rej) => {
     const tx = db.transaction('tracks', 'readonly');
     const store = tx.objectStore('tracks');
     const rq = store.get(trackId);
-    rq.onsuccess = () => res(rq.result || null);
-    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(`idb_Get ${rq.error}`);
   });
 };
 
 const idbPut = async (trackId, blob) => {
-  const attempt = async (reopen=false) => {
-    const db = await getDB(reopen).catch(fatalIDB);
-    return await new Promise((res, rej) => {
-      let failedSync = false;
-      try {
-        const tx = db.transaction('tracks', 'readwrite');
-        tx.oncomplete = () => res();
-        tx.onerror = () => rej(tx.error);
-        try { tx.objectStore('tracks').put(blob, trackId); }
-        catch (e) { failedSync = true; rej(e); }
-      } catch (e) {
-        if (!failedSync) rej(e);
-      }
-    });
-  };
-  try {
-    await attempt(false);
-  } catch (e) {
-    const msg = (e && e.message) || '';
-    if (e && (e.name === 'InvalidStateError' || /not allow(ed)? mutations/i.test(msg))) {
-      // Retry once after forced reopen
-      try {
-        await attempt(true);
-        return;
-      } catch (e2) {
-        fatalIDB(e2);
-      }
-    }
-    fatalIDB(e);
-  }
+  await ensureDB();
+  return await new Promise((res, rej) => {
+    const tx = db.transaction('tracks', 'readwrite');
+    const store = tx.objectStore('tracks');
+    const rq = store.put(blob, trackId);
+    rq.onerror = () => rej(`idb_Put ${rq.error}`);
+    tx.oncomplete = res;
+    tx.onerror = () => rej(`idb_Put ${tx.error}`);
+  });
 };
 
 const idbDelete = async (trackId) => {
-  const attempt = async (reopen=false) => {
-    const db = await getDB(reopen).catch(fatalIDB);
-    return await new Promise((res, rej) => {
-      try {
-        const tx = db.transaction('tracks', 'readwrite');
-        tx.oncomplete = () => res();
-        tx.onerror = () => rej(tx.error);
-        try { tx.objectStore('tracks').delete(trackId); }
-        catch (e) { rej(e); }
-      } catch (e) { rej(e); }
-    });
-  };
-  try {
-    await attempt(false);
-  } catch (e) {
-    const msg = (e && e.message) || '';
-    if (e && (e.name === 'InvalidStateError' || /not allow(ed)? mutations/i.test(msg))) {
-      try { await attempt(true); return; }
-      catch (e2) { fatalIDB(e2); }
-    }
-    fatalIDB(e);
-  }
+  await ensureDB();
+  return await new Promise((res, rej) => {
+    const tx = db.transaction('tracks', 'readwrite');
+    const store = tx.objectStore('tracks');
+    const rq = store.delete(trackId);
+    rq.onerror = () => rej(`idb_Delete ${rq.error}`);
+    tx.oncomplete = res;
+    tx.onerror = () => rej(`idb_Delete ${tx.error}`);
+  });
 };
 
 const idbListKeys = async () => {
-  const db = await getDB().catch(fatalIDB);
+  await ensureDB();
   return await new Promise((res, rej) => {
     const keys = [];
-    try {
-      const tx = db.transaction('tracks', 'readonly');
-      const store = tx.objectStore('tracks');
-      const cursorReq = store.openKeyCursor();
-      cursorReq.onsuccess = (e) => {
-        const c = e.target.result;
-        if (c) { keys.push(c.key); c.continue(); } else res(keys);
-      };
-      cursorReq.onerror = () => rej(cursorReq.error);
-    } catch (e) { rej(e); }
-  }).catch(fatalIDB);
+    const tx = db.transaction('tracks', 'readwrite');
+    const store = tx.objectStore('tracks');
+    const rq = store.openKeyCursor();
+    rq.onsuccess = (e) => {
+      const c = e.target.result;
+      if (c) { keys.push(c.key); c.continue(); } else res(keys);
+    };
+    rq.onerror = () => rej(`idb_ListKeys ${rq.error}`);
+  });
 };
 
 const reportCachedHead = async () => {
@@ -439,31 +387,29 @@ const getTrackBlobURL = async (trackId, is_head) => {
   }
   if (! (trackId in localState.cacheRegistry)) {
     localState.cacheRegistry[trackId] = URL.createObjectURL(blob);
+    if (! localState.recentLRU.includes(trackId)) {
+      localState.recentLRU.push(trackId);
+      while (localState.recentLRU.length > LRU_SIZE) {
+        localState.recentLRU.shift();
+      }
+    }
   }
   return localState.cacheRegistry[trackId];
 };
 
-const evictIfNeeded = async () => {
-  try {
-    // Skip eviction entirely if unsupported
-    if (!(navigator.storage && navigator.storage.estimate)) return;
-    const est = await safeStorageEstimate();
-    const used = est.usage || 0;
-    const quota = est.quota || 0;
-    if (quota && used / quota < 0.9) return; // within budget
-    const protect = new Set([serverState.roomState.queue[0], serverState.roomState.queue[1], ...localState.recentLRU].filter(Boolean));
-    const keys = await idbListKeys();
-    for (const k of keys) {
-      if (!protect.has(k)) {
-        await idbDelete(k);
-        URL.revokeObjectURL(localState.cacheRegistry[k]);
-        delete localState.cacheRegistry[k];
-        const est2 = await safeStorageEstimate();
-        if ((est2.usage || 0) / (est2.quota || 1) < 0.9) break;
-      }
+const dropCache = async () => {
+  const protect = new Set([
+    serverState.roomState.queue[0], 
+    serverState.roomState.queue[1], 
+    ...localState.recentLRU,
+  ].filter(Boolean));
+  const keys = await idbListKeys();
+  for (const k of keys) {
+    if (!protect.has(k)) {
+      delete localState.cacheRegistry[k];
+      URL.revokeObjectURL(localState.cacheRegistry[k]);
+      await idbDelete(k);
     }
-  } catch (e) {
-    console.warn('Eviction failed', e);
   }
 };
 
@@ -471,6 +417,7 @@ const maybePrefetchHeadAndNext = async () => {
   const head = serverState.roomState.queue[0];
   const next = serverState.roomState.queue[1];
   if (!head) return;
+  await dropCache();
   // Build blob URL for head
   const headURL = await getTrackBlobURL(head, true);
   if (els.audio.src !== headURL) {
@@ -489,7 +436,6 @@ const maybePrefetchHeadAndNext = async () => {
   if (next) {
     await getTrackBlobURL(next, false);
   }
-  await evictIfNeeded();
 };
 
 els.audio.addEventListener('ended', async () => {
