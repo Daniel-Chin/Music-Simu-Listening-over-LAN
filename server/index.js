@@ -322,6 +322,10 @@ app.get('/debug/state', (req, res) => {
 // Cover / client static
 app.use('/static', express.static(path.join(__dirname, '../client/public')));
 
+app.get('/favicon.ico', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/public/favicon.ico'));
+});
+
 // Helper to build a base URL with LAN IP
 const guessBaseURL = (req) => {
   const proto = req.headers['x-forwarded-proto'] || 'http';
