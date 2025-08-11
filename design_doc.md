@@ -83,7 +83,7 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
 ### HTTP Endpoints
 
 -   **UI**
-    -   `GET /landing` → webpage of: two input fields (room_code, name). Room code is auto-filled if in URL params. Name is autofilled according to persistent storage.
+    -   `GET /landing` → webpage of: two input fields (room_code, name). Room code is auto-filled if in URL params. Name is autofilled according to browser persistent storage.
     -   `GET /` → webpage of: the main UI. 
 -   **Discovery & Pairing**
     -   `GET /qr` `{room_code}` → png file of qr code of host url with room code param
@@ -135,8 +135,7 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
     1)  mutate in‑memory state,
     2)  **atomic write** to `STATE_FILE` (write temp + fsync + rename),
     3)  emit SSE with updated `eventCount`.
--   On startup: load state; if corrupt → return 500 on control; log
-    "SCREAM" and require manual fix.
+-   On startup: load state; if corrupt, fatal error. Then, the queue should be updated. First load the playlist from fs. Sort it according to filename. Initiate a new queue by rotating the playlist according to the head item of the old queue in persistent JSON. Goal: capture audio dir changes while keeping listening progress. If head is not found in new playlist, skip rotating.
 -   Client disconnection is detected via **SSE close** OR **heartbeat timeout (no /ping within 6 s)**.
 
 ### misc
