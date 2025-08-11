@@ -197,53 +197,112 @@ const renderStatus = () => {
   }
 };
 
-// Audio & caching
-const cacheName = 'audio';
+// Audio & caching (IndexedDB instead of Cache Storage)
+// DB schema: db 'audio', objectStore 'tracks' (key = trackId, value = Blob)
+// We keep LRU-ish set via state.recentLRU plus protect current head & next.
 const pinPolicyMax = 5; // current + next + last 3
 
-const ensureCache = async () => await caches.open(cacheName);
+const getDB = (() => {
+  let p;
+  return () => p || (p = new Promise((resolve, reject) => {
+    const req = indexedDB.open('audio', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks');
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }));
+})();
 
-const fetchAndCacheTrack = async (trackId) => {
-  const cache = await ensureCache();
+const idbGet = async (trackId) => {
+  const db = await getDB();
+  return await new Promise((res, rej) => {
+    const tx = db.transaction('tracks', 'readonly');
+    const store = tx.objectStore('tracks');
+    const rq = store.get(trackId);
+    rq.onsuccess = () => res(rq.result || null);
+    rq.onerror = () => rej(rq.error);
+  });
+};
+
+const idbPut = async (trackId, blob) => {
+  const db = await getDB();
+  return await new Promise((res, rej) => {
+    const tx = db.transaction('tracks', 'readwrite');
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+    tx.objectStore('tracks').put(blob, trackId);
+  });
+};
+
+const idbDelete = async (trackId) => {
+  const db = await getDB();
+  return await new Promise((res, rej) => {
+    const tx = db.transaction('tracks', 'readwrite');
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+    tx.objectStore('tracks').delete(trackId);
+  });
+};
+
+const idbListKeys = async () => {
+  const db = await getDB();
+  return await new Promise((res, rej) => {
+    const keys = [];
+    const tx = db.transaction('tracks', 'readonly');
+    const store = tx.objectStore('tracks');
+    const cursorReq = store.openKeyCursor();
+    cursorReq.onsuccess = (e) => {
+      const c = e.target.result;
+      if (c) { keys.push(c.key); c.continue(); } else res(keys); };
+    cursorReq.onerror = () => rej(cursorReq.error);
+  });
+};
+
+const fetchAndStoreTrack = async (trackId) => {
   const url = `/file/${trackId}`;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('fetch failed');
-  await cache.put(url, resp.clone());
+  const blob = await resp.blob();
+  await idbPut(trackId, blob);
   state.cachedSet.add(trackId);
-  return await resp.blob();
+  return blob;
 };
 
 const buildBlobURLForTrack = async (trackId) => {
-  const cache = await ensureCache();
-  const url = `/file/${trackId}`;
-  let resp = await cache.match(url);
-  if (!resp) {
+  let blob = await idbGet(trackId);
+  if (!blob) {
     try {
-      resp = await fetch(url);
-      if (!resp.ok) throw 0;
-      await cache.put(url, resp.clone());
-      state.cachedSet.add(trackId);
+      blob = await fetchAndStoreTrack(trackId);
     } catch (e) {
       showBubble('Network error while fetching audio.');
       throw e;
     }
+  } else {
+    state.cachedSet.add(trackId);
   }
-  const blob = await resp.blob();
   return URL.createObjectURL(blob);
 };
 
 const evictIfNeeded = async () => {
-  const est = await navigator.storage.estimate();
-  const used = est.usage || 0;
-  const quota = est.quota || 0;
-  if (used / quota < 0.9) return; // ok
-  const protect = new Set([state.queue[0], state.queue[1]].filter(Boolean));
-  const victims = state.recentLRU.filter(x => !protect.has(x));
-  const cache = await ensureCache();
-  for (const tid of victims) {
-    await cache.delete(`/file/${tid}`);
-    state.cachedSet.delete(tid);
-    if ((await navigator.storage.estimate()).usage / (await navigator.storage.estimate()).quota < 0.9) break;
+  try {
+    const est = await navigator.storage.estimate();
+    const used = est.usage || 0;
+    const quota = est.quota || 0;
+    if (quota && used / quota < 0.9) return; // within budget
+    const protect = new Set([state.queue[0], state.queue[1], ...state.recentLRU].filter(Boolean));
+    const keys = await idbListKeys();
+    for (const k of keys) {
+      if (!protect.has(k)) {
+        await idbDelete(k);
+        state.cachedSet.delete(k);
+        const est2 = await navigator.storage.estimate();
+        if ((est2.usage || 0) / (est2.quota || 1) < 0.9) break;
+      }
+    }
+  } catch (e) {
+    console.warn('Eviction failed', e);
   }
 };
 
