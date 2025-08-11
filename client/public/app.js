@@ -5,16 +5,13 @@ const clientId = localStorage.getItem('clientId') || '';
 const clientName = localStorage.getItem('clientName') || '';
 if (!room || !clientId) location.href = '/landing?room=' + encodeURIComponent(room || '');
 
-const state = {
-  eventCount: 0,
+const serverState = {
+  roomState: null,
   snapshot: null,
   index: [],
-  queue: [],
-  playState: { mode: 'paused', anchorPositionSec: 0, wallTime: 0 },
-  headBlobURL: null,
-  nextBlobURL: null,
-  currentTrackId: null,
-  cachedSet: new Set(),  // trackIds we hold (in Cache Storage)
+};
+const localState = {
+  cacheRegistry: {},     // from trackId to blobURL
   recentLRU: [],         // last 3 played
 };
 
@@ -59,33 +56,40 @@ const showBubble = (msg) => {
   els.bubble.classList.remove('hidden');
   setTimeout(() => els.bubble.classList.add('hidden'), 2500);
 };
-const findIndexItem = (trackId) => state.index.find(x => x.trackId === trackId) || null;
+const findIndexItem = (trackId) => serverState.index.find(x => x.trackId === trackId) || null;
 
 // Networking primitives
 const api = async (path, body, requireEventHeader=false) => {
   const headers = { 'Content-Type': 'application/json' };
-  if (requireEventHeader) headers['If-Match-Event'] = String(state.eventCount);
+  if (requireEventHeader) headers['If-Match-Event'] = String(serverState.roomState.eventCount);
   const r = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
   if (r.status === 409) {
-    const data = await r.json();
-    state.eventCount = data.expectedEventCount;
-    applySnapshot(data.snapshot);
+    const snapshot = await r.json();
+    applySnapshot(snapshot);
     showBubble('Out-of-sync; refreshed.');
     return null;
   }
   return await r.json();
 };
 
-// Snapshot + events
 const applySnapshot = (snap) => {
   if (!snap) return;
-  state.snapshot = snap;
-  state.eventCount = snap.eventCount;
-  state.queue = snap.queue.slice();
-  state.index = snap.index.slice();
-  state.playState = snap.playState;
+  serverState.snapshot = snap;
+  serverState.roomState = snap.roomState;
+  serverState.index = snap.index.slice();
   render();
   maybePrefetchHeadAndNext().catch(console.error);
+  // Apply play/paused state anchor
+  const playState = serverState.roomState.playState;
+  if (playState.mode === 'playing') {
+    els.audio.currentTime = playState.anchorPositionSec || 0;
+    els.audio.play().catch(()=>{});
+  } else if (playState.mode === 'paused') {
+    els.audio.currentTime = playState.anchorPositionSec || 0;
+    els.audio.pause();
+  } else if (playState.mode === 'onBarrier') {
+    els.audio.pause();
+  }
 };
 
 const connectSSE = () => {
@@ -95,10 +99,10 @@ const connectSSE = () => {
   const es = new EventSource(url.toString());
   es.onmessage = (e) => {
     try {
-      const { event, payload, eventCount } = JSON.parse(e.data);
-      console.log(`SSE event [${eventCount}]`);
-      if (event === 'state' && payload) {
-        applySnapshot(payload);
+      const snapshot = JSON.parse(e.data);
+      if (snapshot) {
+        console.log(`SSE event [${snapshot.roomState.eventCount}]`);
+        applySnapshot(snapshot);
       }
     } catch {}
   };
@@ -125,36 +129,32 @@ fetch('/snapshot?room=' + encodeURIComponent(room))
 // Controls
 els.playPauseBtn.addEventListener('click', async () => {
   const pos = els.audio.currentTime || 0;
-  if (state.playState.mode === 'playing') {
-    const r = await api('/pause', { room }, true);
-    if (r) applySnapshot(r.snapshot);
+  if (serverState.roomState.playState.mode === 'playing') {
+    await api('/pause', { room }, true);
   } else {
-    const r = await api('/play', { room, positionSec: pos }, true);
-    if (r) applySnapshot(r.snapshot);
+    await api('/play', { room, positionSec: pos }, true);
   }
 });
 els.nextBtn.addEventListener('click', async () => {
-  const r = await api('/next', { room }, true);
-  if (r) applySnapshot(r.snapshot);
+  await api('/next', { room }, true);
 });
 els.prevBtn.addEventListener('click', async () => {
-  const r = await api('/prev', { room }, true);
-  if (r) applySnapshot(r.snapshot);
+  await api('/prev', { room }, true);
 });
 els.seek.addEventListener('input', (e) => {
   const dur = Math.max(1, els.audio.duration || 1);
   const newPos = dur * (Number(e.target.value) / 100);
   els.audio.currentTime = newPos;
+  els.audio.pause();
 });
 els.seek.addEventListener('change', async () => {
   const pos = els.audio.currentTime || 0;
-  const r = await api('/seek', { room, positionSec: pos }, true);
-  if (r) applySnapshot(r.snapshot);
+  await api('/seek', { room, positionSec: pos }, true);
 });
 
 // Rendering
 const render = () => {
-  const headId = state.queue[0];
+  const headId = serverState.roomState.queue[0];
   const item = findIndexItem(headId);
   if (item) {
     els.title.textContent = item.title || item.fileName;
@@ -182,9 +182,9 @@ const render = () => {
 const renderMembers = () => {
   if (!els.membersList) return;
   els.membersList.innerHTML = '';
-  const clients = Object.entries((state.snapshot && state.snapshot.clients) || {});
+  const clients = Object.entries(serverState.roomState.clients || {});
   const nowSec = Date.now() / 1000;
-  const head = state.queue[0];
+  const head = serverState.roomState.queue[0];
   clients
     .sort((a,b)=>a[0].localeCompare(b[0]))
     .forEach(([cid, c]) => {
@@ -196,7 +196,7 @@ const renderMembers = () => {
       parts.push(`(${cid.slice(0,4)})`);
       parts.push(online ? '🟢' : '⚪');
       if (ready) parts.push('[ready]');
-      if (state.playState.mode === 'onBarrier' && online && !ready) parts.push('[downloading]');
+      if (serverState.roomState.playState.mode === 'onBarrier' && online && !ready) parts.push('[downloading]');
       li.textContent = parts.join(' ');
       els.membersList.appendChild(li);
     });
@@ -204,7 +204,7 @@ const renderMembers = () => {
 
 const renderQueue = () => {
   els.queueList.innerHTML = '';
-  state.queue.forEach((trackId, i) => {
+  serverState.roomState.queue.forEach((trackId, i) => {
     const it = findIndexItem(trackId);
     const li = document.createElement('li');
     const left = document.createElement('div');
@@ -214,8 +214,7 @@ const renderQueue = () => {
     btn.textContent = 'Play next';
     btn.disabled = i === 0;
     btn.addEventListener('click', async () => {
-      const r = await api('/nudge', { room, trackId }, true);
-      if (r) applySnapshot(r.snapshot);
+      await api('/nudge', { room, trackId }, true);
     });
     li.appendChild(btn);
     els.queueList.appendChild(li);
@@ -231,22 +230,22 @@ const formatTime = (t) => {
 };
 
 const renderStatus = () => {
-  const activeCount = Object.values(state.snapshot.clients || {}).filter(c => c.sse && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
-  const head = state.queue[0];
-  const readyCount = Object.values(state.snapshot.clients || {}).filter(c => c.sse && c.cachedHeadTrackId === head && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
-  if (state.playState.mode === 'onBarrier') {
-    const haveHead = head && state.cachedSet.has(head) && !!state.headBlobURL;
+  const activeCount = Object.values(serverState.roomState.clients || {}).filter(c => c.sse && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
+  const head = serverState.roomState.queue[0];
+  const readyCount = Object.values(serverState.roomState.clients || {}).filter(c => c.sse && c.cachedHeadTrackId === head && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
+  if (serverState.roomState.playState.mode === 'onBarrier') {
+    const haveHead = head && (head in localState.cacheRegistry);
     if (haveHead) {
       els.statusLine.textContent = `waiting for others to download... (${readyCount}/${activeCount} ready)`;
     } else {
       els.statusLine.textContent = 'downloading...';
     }
-  } else if (state.playState.mode === 'playing') {
+  } else if (serverState.roomState.playState.mode === 'playing') {
     els.statusLine.textContent = `Playing at ${formatTime(els.audio.currentTime)}`;
   } else {
-    els.statusLine.textContent = `Paused at ${formatTime(state.playState.anchorPositionSec)}`;
+    els.statusLine.textContent = `Paused at ${formatTime(serverState.roomState.playState.anchorPositionSec)}`;
   }
-  switch (state.playState.mode) {
+  switch (serverState.roomState.playState.mode) {
     case 'playing':
       playPauseBtn.textContent = '⏸️';
       break;
@@ -261,7 +260,7 @@ const renderStatus = () => {
 
 // Audio & caching (IndexedDB instead of Cache Storage)
 // DB schema: db 'audio', objectStore 'tracks' (key = trackId, value = Blob)
-// We keep LRU-ish set via state.recentLRU plus protect current head & next.
+// We keep LRU-ish set via localState.recentLRU plus protect current head & next.
 const pinPolicyMax = 5; // current + next + last 3
 
 const fatalIDB = (err) => {
@@ -392,11 +391,10 @@ const fetchAndStoreTrack = async (trackId) => {
   if (!resp.ok) throw new Error('fetch failed');
   const blob = await resp.blob();
   await idbPut(trackId, blob);
-  state.cachedSet.add(trackId);
   return blob;
 };
 
-const buildBlobURLForTrack = async (trackId) => {
+const getTrackBlobURL = async (trackId) => {
   let blob = await idbGet(trackId);
   if (!blob) {
     try {
@@ -405,10 +403,11 @@ const buildBlobURLForTrack = async (trackId) => {
       showBubble('Network error while fetching audio.');
       throw e;
     }
-  } else {
-    state.cachedSet.add(trackId);
   }
-  return URL.createObjectURL(blob);
+  if (! (trackId in localState.cacheRegistry)) {
+    localState.cacheRegistry[trackId] = URL.createObjectURL(blob);
+  }
+  return localState.cacheRegistry[trackId];
 };
 
 const evictIfNeeded = async () => {
@@ -419,12 +418,13 @@ const evictIfNeeded = async () => {
     const used = est.usage || 0;
     const quota = est.quota || 0;
     if (quota && used / quota < 0.9) return; // within budget
-    const protect = new Set([state.queue[0], state.queue[1], ...state.recentLRU].filter(Boolean));
+    const protect = new Set([serverState.roomState.queue[0], serverState.roomState.queue[1], ...localState.recentLRU].filter(Boolean));
     const keys = await idbListKeys();
     for (const k of keys) {
       if (!protect.has(k)) {
         await idbDelete(k);
-        state.cachedSet.delete(k);
+        URL.revokeObjectURL(localState.cacheRegistry[k]);
+        delete localState.cacheRegistry[k];
         const est2 = await safeStorageEstimate();
         if ((est2.usage || 0) / (est2.quota || 1) < 0.9) break;
       }
@@ -436,14 +436,14 @@ const evictIfNeeded = async () => {
 
 const maybePrefetchHeadAndNext = async () => {
   try {
-    const head = state.queue[0];
-    const next = state.queue[1];
+    const head = serverState.roomState.queue[0];
+    const next = serverState.roomState.queue[1];
     if (!head) return;
     // Build blob URL for head
-    const headURL = await buildBlobURLForTrack(head);
-    if (state.headBlobURL) URL.revokeObjectURL(state.headBlobURL);
-    state.headBlobURL = headURL;
-    els.audio.src = headURL;
+    const headURL = await getTrackBlobURL(head);
+    if (els.audio.src !== headURL) {
+      els.audio.src = headURL;
+    }
 
     // Preload metadata if duration missing
     if (!findIndexItem(head)?.duration) {
@@ -462,36 +462,15 @@ const maybePrefetchHeadAndNext = async () => {
 
     // Pre-fetch next
     if (next) {
-      await buildBlobURLForTrack(next);
+      await getTrackBlobURL(next);
     }
     await evictIfNeeded();
-
-    // Apply play/paused state anchor
-    if (state.playState.mode === 'playing') {
-      els.audio.currentTime = state.playState.anchorPositionSec || 0;
-      els.audio.play().catch(()=>{});
-    } else if (state.playState.mode === 'paused') {
-      els.audio.currentTime = state.playState.anchorPositionSec || 0;
-      els.audio.pause();
-    } else if (state.playState.mode === 'onBarrier') {
-      els.audio.pause();
-    }
   } catch (e) {
     console.error(e);
   }
 };
 
-// On track end: rotate queue locally and request /next (server-initiated event is the source of truth)
 els.audio.addEventListener('ended', async () => {
-  // Optimistic UI: request next
-  const r = await api('/next', { room }, true);
-  if (r) applySnapshot(r.snapshot);
-  // Record LRU
-  if (state.queue.length) {
-    const finished = state.queue[0];
-    state.recentLRU.unshift(finished);
-    state.recentLRU = Array.from(new Set(state.recentLRU)).slice(0, 3);
-  }
 });
 
 // Keep seek bar in sync

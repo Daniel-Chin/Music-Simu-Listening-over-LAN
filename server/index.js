@@ -52,13 +52,14 @@ const getRoom = (room_code) => {
   return rs;
 };
 
-const pushSSE = (room_code, evt) => {
+const pushSSE = (room_code) => {
   const streams = sseStreams.get(room_code);
   if (!streams) return;
-  console.log(`Pushing SSE with eventCount ${evt.eventCount}`);
+  const snapshot = fullSnapshot(room_code);
+  console.log(`Pushing SSE with eventCount ${snapshot.roomState.eventCount}`);
   for (const [cid, res] of streams.entries()) {
     try {
-      res.write(`data: ${JSON.stringify(evt)}\n\n`);
+      res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
     } catch (e) {
       // ignore broken pipe
     }
@@ -68,11 +69,7 @@ const pushSSE = (room_code, evt) => {
 const fullSnapshot = (room_code) => {
   const rs = getRoom(room_code);
   return {
-    room: room_code,
-    eventCount: rs.eventCount,
-    queue: rs.queue,
-    playState: rs.playState,
-    clients: rs.clients,
+    roomState: rs,
     index: playlist,
   };
 };
@@ -83,7 +80,7 @@ const acceptEvent = (room_code, mutate) => {
   mutate(rs);
   bumpEvent(rs);
   saveState(rooms);
-  pushSSE(room_code, { event: 'state', payload: fullSnapshot(room_code), eventCount: rs.eventCount });
+  pushSSE(room_code);
 };
 
 const requireMatchHeader = (req, rs) => {
@@ -126,7 +123,7 @@ app.post('/pair', (req, res) => {
     cachedHeadTrackId: null,
   };
   saveState(rooms);
-  res.json({ clientId, eventCount: rs.eventCount, snapshot: fullSnapshot(room_code) });
+  res.json({ clientId });
 });
 
 // Index & Metadata
@@ -211,6 +208,18 @@ app.post('/ping', (req, res) => {
   const rs = rooms[room];
   const c = rs.clients[clientId];
   if (c) c.lastPingSec = nowSec();
+
+  // Evict stale clients (no heartbeat in > 2 * HEARTBEAT_SEC)
+  const now = nowSec();
+  for (const [cid, client] of Object.entries(rs.clients)) {
+    if (now - client.lastPingSec > HEARTBEAT_SEC * 2) {
+      console.log(`Evicting stale client ${cid} from room ${room}`);
+      delete rs.clients[cid];
+      sseStreams.get(room)?.delete(cid);
+      pushSSE(room);
+    }
+  }
+
   saveState(rooms);
   res.json({ ok: true });
 });
@@ -230,7 +239,7 @@ app.post('/play', (req, res) => {
       wallTime: Date.now() / 1000
     };
   });
-  res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  res.json({ ok: true });
 });
 
 app.post('/pause', (req, res) => {
@@ -243,7 +252,7 @@ app.post('/pause', (req, res) => {
   acceptEvent(room, (st) => {
     st.playState.mode = 'paused';
   });
-  res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  res.json({ ok: true });
 });
 
 app.post('/seek', (req, res) => {
@@ -256,7 +265,7 @@ app.post('/seek', (req, res) => {
   acceptEvent(room, (st) => {
     st.playState.anchorPositionSec = Math.max(0, Number(positionSec) || 0);
   });
-  res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  res.json({ ok: true });
 });
 
 app.post('/next', (req, res) => {
@@ -274,7 +283,7 @@ app.post('/next', (req, res) => {
     // null all cached markers (clients must re-assert for new head)
     for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
   });
-  res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  res.json({ ok: true });
 });
 
 app.post('/prev', (req, res) => {
@@ -290,7 +299,7 @@ app.post('/prev', (req, res) => {
     st.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
     for (const c of Object.values(st.clients)) c.cachedHeadTrackId = null;
   });
-  res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  res.json({ ok: true });
 });
 
 app.post('/nudge', (req, res) => {
@@ -307,7 +316,7 @@ app.post('/nudge', (req, res) => {
       st.queue.splice(1, 0, trackId); // next-up
     }
   });
-  res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  res.json({ ok: true });
 });
 
 app.post('/cache-head', (req, res) => {
@@ -324,7 +333,7 @@ app.post('/cache-head', (req, res) => {
   if (rs.playState?.mode === 'onBarrier' && barrierSatisfied(rs)) {
     acceptEvent(room, (st) => { st.playState.mode = 'playing'; });
   }
-  res.json({ eventCount: rs.eventCount, snapshot: fullSnapshot(room) });
+  res.json({ ok: true });
 });
 
 // Debug (dev-only)
