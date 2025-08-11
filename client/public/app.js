@@ -32,13 +32,19 @@ const els = {
   shareUrl: document.getElementById('share-url'),
   qrImg: document.getElementById('qr-img'),
   roomCode: document.getElementById('room-code'),
-  membersList: document.getElementById('members-list'), // NEW
+  membersList: document.getElementById('members-list'),
+  changeNameBtn: document.getElementById('changeNameBtn'),
 };
 
 els.roomLabel.textContent = room;
 els.shareUrl.textContent = location.origin + '/?room=' + room;
 els.qrImg.src = '/qr?room_code=' + encodeURIComponent(room);
 els.roomCode.textContent = 'Code: ' + room;
+
+els.changeNameBtn.addEventListener('click', () => {
+  // go to /landing with the same params
+  window.location.href = `${window.location.origin}/landing?room=${room}`;
+});
 
 // Tabs
 document.querySelectorAll('.tabs button').forEach(btn => {
@@ -193,7 +199,7 @@ const renderMembers = () => {
       const ready = online && c.cachedHeadTrackId === head;
       const parts = [];
       if (c.name) parts.push(c.name); // show name if supplied
-      parts.push(`(${cid.slice(0,4)})`);
+      // parts.push(`(${cid.slice(0,4)})`);
       parts.push(online ? '🟢' : '⚪');
       if (ready) parts.push('[ready]');
       if (serverState.roomState.playState.mode === 'onBarrier' && online && !ready) parts.push('[downloading]');

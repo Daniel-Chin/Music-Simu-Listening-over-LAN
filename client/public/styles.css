@@ -216,3 +216,7 @@ input[type=range] {
     margin-left: 12px;
     margin-right: 12px;
 }
+
+a {
+    color: #4499ff;
+}
