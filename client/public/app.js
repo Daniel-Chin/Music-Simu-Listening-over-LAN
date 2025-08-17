@@ -1,6 +1,9 @@
 // SPA client: tabs, SSE, caching, queue, controls
 const LRU_SIZE = 3;
 
+// for local debugging
+let reject_server_events = false;
+
 const qs = new URLSearchParams(location.search);
 const room = qs.get('room') || localStorage.getItem('room') || '';
 const clientName = localStorage.getItem('clientName') || '';
@@ -236,6 +239,7 @@ const connectSSE = () => {
   url.searchParams.set('clientName', clientName);
   const es = new EventSource(url.toString());
   es.onmessage = (e) => {
+    if (reject_server_events) return;
     try {
       const snapshot = JSON.parse(e.data);
       if (snapshot) {
