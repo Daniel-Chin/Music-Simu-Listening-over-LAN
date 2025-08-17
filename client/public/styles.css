@@ -8,6 +8,7 @@ body {
     padding: 0;
     background: #0b0e12;
     color: #e5e7eb;
+    width: 100vw;
 }
 
 #app {
@@ -87,8 +88,7 @@ input[type=range] {
 
 .tabs {
     display: flex;
-    gap: 8px;
-    padding: 8px 16px;
+    padding: 0;
     margin-bottom: 36px;
     background: #0f172a;
     position: sticky;
@@ -99,7 +99,10 @@ input[type=range] {
 .tabs button {
     flex: 1;
     padding: 10px;
-    border-radius: 999px;
+    margin-left: 0;
+    margin-right: 0;
+    border-radius: 0;
+    border: none;
 }
 
 .tab {
@@ -211,7 +214,8 @@ button {
     border-radius: 10px;
     border: 1px solid #374151;
     background: #111827;
-    color: #e5e7eb
+    color: #e5e7eb;
+    cursor: pointer;
 }
 button.active {
     background: #1e293b;

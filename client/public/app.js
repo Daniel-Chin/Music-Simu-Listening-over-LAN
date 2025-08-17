@@ -308,6 +308,17 @@ const render = () => {
   renderQueue();
   renderStatus();
   renderMembers();
+  switch (serverState.roomState.playState.mode) {
+    case 'playing':
+      playPauseBtn.textContent = '⏸️';
+      break;
+    case 'paused':
+      playPauseBtn.textContent = '▶️';
+      break;
+    case 'onBarrier':
+      playPauseBtn.textContent = '...';
+      break;
+  }
 };
 
 const renderMembers = () => {
@@ -363,6 +374,7 @@ const renderStatus = () => {
   const isHere = (c) =>(
     c.sse && (wallTime() - (c.lastPingSec||0) <= 6)
   );
+  if (!serverState.roomState) return;
   const head = serverState.roomState.queue[0];
   const activeCount = Object.values(serverState.roomState.clients || {}).filter(isHere).length;
   const readyCount  = Object.values(serverState.roomState.clients || {}).filter(c => (isHere(c) && c.cachedHeadTrackId === head)).length;
@@ -377,17 +389,6 @@ const renderStatus = () => {
     els.statusLine.textContent = `Playing at ${formatTime(els.audio.currentTime)}`;
   } else {
     els.statusLine.textContent = `Paused at ${formatTime(els.audio.currentTime)}`;
-  }
-  switch (serverState.roomState.playState.mode) {
-    case 'playing':
-      playPauseBtn.textContent = '⏸️';
-      break;
-    case 'paused':
-      playPauseBtn.textContent = '▶️';
-      break;
-    case 'onBarrier':
-      playPauseBtn.textContent = '...';
-      break;
   }
 };
 
@@ -551,13 +552,13 @@ els.audio.addEventListener('ended', async () => {
   await api('/next', {}, true);
 });
 
-// Keep seek bar in sync
+// Keep seek bar and status line in sync
 setInterval(() => {
   const dur = els.audio.duration || 0;
   const cur = els.audio.currentTime || 0;
   if (dur > 0) els.seek.value = String(Math.round(cur / dur * 100));
   renderStatus();
-}, 500);
+}, 30);
 
 // Safe storage estimate helper (handles browsers without navigator.storage)
 const safeStorageEstimate = async () => {
