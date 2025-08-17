@@ -317,8 +317,8 @@ const rotateQueue = (rs, is_next_not_prev) => {
     const head = rs.queue.shift();
     rs.queue.push(head);
   } else {
-    const tail = rt.queue.pop();
-    rt.queue.unshift(tail);
+    const tail = rs.queue.pop();
+    rs.queue.unshift(tail);
   }
   rs.playState = {
     mode: 'onBarrier', 
