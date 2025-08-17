@@ -1,13 +1,16 @@
-import express from 'express';
-import fs from 'fs';
-import path from 'path';
+import fs      from 'node:fs/promises';
+import fssync  from 'node:fs';
+import path    from 'node:path';
 import { fileURLToPath } from 'url';
 import { networkInterfaces } from 'os';
-import { nanoid } from 'nanoid';
-import QRCode from 'qrcode';
-import mime from 'mime';
 
-import { PORT, AUDIO_DIR, ROOM_CODE_LENGTH, HEARTBEAT_SEC, DEV_MODE } from './config.js';
+import express from 'express';
+import mime from 'mime';
+import { nanoid } from 'nanoid';
+import ffm     from 'fluent-ffmpeg';
+import QRCode from 'qrcode';
+
+import { PORT, AUDIO_DIR, ROOM_CODE_LENGTH, HEARTBEAT_SEC, DEV_MODE, CACHE_DIR } from './config.js';
 import { loadState, saveState, newRoomState, bumpEvent, nowSec, barrierSatisfied } from './state.js';
 
 const LEAD_AGAINST_LATENCY = 0.5;
@@ -21,6 +24,15 @@ app.use(express.json({ limit: '2mb' }));
 let playlist = [];
 let rooms = {};  // map room_code -> room state
 const sseStreams = new Map(); // room_code => Map(clientName => res)
+
+try {
+  const { default: ffmpegPath } = await import('ffmpeg-static');
+  if (ffmpegPath) ffm.setFfmpegPath(ffmpegPath);
+} catch { /* optional */ }
+
+await fs.mkdir(CACHE_DIR, { recursive: true });
+const cachePathFor = (id) => path.join(CACHE_DIR, `${id}.opus`);
+const inflight = new Map(); // id -> Promise<string outPath>
 
 const boot = async () => {
   const loaded = await loadState();
@@ -137,7 +149,7 @@ app.get('/cover/:trackId', async (req, res) => {
     const mmAny = await import('music-metadata');
     let meta = {};
     try {
-      const buf = fs.readFileSync(file);
+      const buf = fssync.readFileSync(file);
       meta = await mmAny.parseBuffer(buf, { mimeType: mime.getType(file) || undefined }, { duration: false });
     } catch {}
     const pic = meta.common && Array.isArray(meta.common.picture) ? meta.common.picture[0] : null;
@@ -150,16 +162,62 @@ app.get('/cover/:trackId', async (req, res) => {
 });
 
 // Files
-app.get('/file/:trackId', (req, res) => {
+app.use('/cache', express.static(CACHE_DIR, {
+  immutable: true,
+  maxAge: '30d',
+  setHeaders: (res) => {
+    // Weak ETag is already added by express.static; adding Cache-Control here.
+    res.setHeader('Accept-Ranges', 'bytes');
+  },
+}));
+
+app.get('/file/:trackId', async (req, res, next) => {
   const { trackId } = req.params;
   const item = playlist.find(t => t.trackId === trackId);
   if (!item) return res.status(404).send('track not found');
-  const fpath = path.join(AUDIO_DIR, item.fileName);
-  const type = item.mime || mime.getType(fpath) || 'application/octet-stream';
-  res.setHeader('Content-Type', type);
-  const stream = fs.createReadStream(fpath);
-  stream.pipe(res);
+  const src_path = path.join(AUDIO_DIR, item.fileName);
+  const cache_path = cachePathFor(trackId);
+  let promise = inflight.get(trackId);
+  if ((!promise) && fssync.existsSync(cache_path)) {
+    console.log(`cache hits: ${trackId}`);
+  } else {
+    if (!promise) {
+      console.log(`transcoding ${trackId}...`);
+      promise = transcodeOpus(src_path, cache_path);
+      inflight.set(trackId, promise);
+      promise.finally(() => {
+        inflight.delete(trackId);
+        console.log(`transcoded ${trackId}.`);
+      });
+    }
+    await promise;
+  }
+  req.url = `/cache/${path.basename(cache_path)}`;
+  return app._router.handle(req, res, next);
 });
+
+const transcodeOpus = async (src_path, cache_path) => {
+  // ffmpeg -i in.wav -c:a libopus -b:a 128k out.opus
+  return await new Promise((resolve, reject) => {
+    ffm(src_path)
+      .noVideo()
+      .audioCodec('libopus')
+      .audioBitrate('128k')
+      .format('opus')
+      .outputOptions([
+        '-sn', '-dn',               // drop subs/data: -sn -dn
+        '-map', '0:a:0',            // pick first audio: -map 0:a:0
+        // '-map_chapters', '-1',      // drop chapters
+        '-map_metadata', '0',       // keep global metadata
+        '-vbr', 'on',               // libopus VBR
+        '-compression_level', '10', // libopus quality
+      ])
+      // .on('start', cmd => console.log('ffmpeg:', cmd))
+      .on('error', reject)
+      .on('end', resolve)
+      .save(cache_path);
+  });
+};
 
 app.post('/snapshot', (req, res) => {
   const room = req.body.room;
