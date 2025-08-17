@@ -37,6 +37,23 @@ export const newRoomState = (queue) => ({
   clients: {},
 });
 
+export const setQueueToPlaylistKeepingHead = (rs, playlist) => {
+  let newQueue;
+  const playlistIds = playlist.map(t => t.trackId);
+  if (Array.isArray(rs.queue) && rs.queue.length > 0) {
+    const head = rs.queue[0];
+    const idx = playlistIds.indexOf(head);
+    if (idx >= 0) {
+      newQueue = playlistIds.slice(idx).concat(playlistIds.slice(0, idx));
+    } else {
+      newQueue = playlistIds.slice();
+    }
+  } else {
+    newQueue = playlistIds.slice();
+  }
+  rs.queue = newQueue;
+};
+
 export const loadState = async () => {
   let state = {};
   if (fs.existsSync(STATE_FILE)) {
@@ -57,23 +74,10 @@ export const loadState = async () => {
   }
   // Build fresh playlist
   const playlist = await buildPlaylistIndex(AUDIO_DIR);
-  const playlistIds = playlist.map(t => t.trackId);
 
   // For each room: rotate queue to align with new playlist, reset cached markers, bump eventCount
   for (const [room, rs] of Object.entries(state)) {
-    let newQueue;
-    if (Array.isArray(rs.queue) && rs.queue.length > 0) {
-      const head = rs.queue[0];
-      const idx = playlistIds.indexOf(head);
-      if (idx >= 0) {
-        newQueue = playlistIds.slice(idx).concat(playlistIds.slice(0, idx));
-      } else {
-        newQueue = playlistIds.slice();
-      }
-    } else {
-      newQueue = playlistIds.slice();
-    }
-    rs.queue = newQueue;
+    setQueueToPlaylistKeepingHead(rs, playlist);
     for (const c of Object.values(rs.clients || {})) {
       c.cachedHeadTrackId = null;
     }

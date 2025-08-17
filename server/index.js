@@ -10,8 +10,14 @@ import { nanoid } from 'nanoid';
 import ffm     from 'fluent-ffmpeg';
 import QRCode from 'qrcode';
 
-import { PORT, AUDIO_DIR, ROOM_CODE_LENGTH, HEARTBEAT_SEC, DEV_MODE, CACHE_DIR } from './config.js';
-import { loadState, saveState, newRoomState, bumpEvent, nowSec, barrierSatisfied } from './state.js';
+import {
+  PORT, AUDIO_DIR, ROOM_CODE_LENGTH, HEARTBEAT_SEC, DEV_MODE, 
+  CACHE_DIR,
+} from './config.js';
+import {
+  loadState, saveState, newRoomState, bumpEvent, nowSec, 
+  barrierSatisfied, setQueueToPlaylistKeepingHead,
+} from './state.js';
 
 const LEAD_AGAINST_LATENCY = 0.5;
 
@@ -420,6 +426,41 @@ app.post('/nudge', (req, res) => {
     rs.queue.splice(1, 0, trackId); // next-up
   }
 
+  afterEvent(room, rs);
+  res.json({ ok: true });
+});
+
+const swap = (arr, i, j) => {
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+};
+
+const shuffleArrayInPlace = (arr) => {
+  // Fisher-Yates
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    swap(arr, i, j);
+  }
+};
+
+app.post('/shuffle-queue', (req, res) => {
+  const { room } = req.body;
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+
+  const head = rs.queue[0];
+  shuffleArrayInPlace(rs.queue);
+  const idx = rs.queue.indexOf(head);
+  swap(rs.queue, 0, idx); // put head back to the front
+  afterEvent(room, rs);
+  res.json({ ok: true });
+});
+
+app.post('/reset-queue', (req, res) => {
+  const { room } = req.body;
+  const rs = getRoomState(room, res);
+  if (!checkEventCount(req, res, rs)) return;
+
+  setQueueToPlaylistKeepingHead(rs, playlist);
   afterEvent(room, rs);
   res.json({ ok: true });
 });

@@ -41,6 +41,9 @@ const els = {
   membersList: document.getElementById('members-list'),
   changeNameBtn: document.getElementById('changeNameBtn'),
   rtlDiv: document.getElementById('rtl'),
+  // new elements
+  rewindBtn: document.getElementById('rewindBtn'),
+  shuffleToggleBtn: document.getElementById('shuffleToggleBtn'),
 };
 
 els.roomLabel.textContent = room;
@@ -300,6 +303,31 @@ els.seek.addEventListener('input', (e) => {
   const dur = Math.max(1, els.audio.duration || 1);
   const newPos = dur * (Number(e.target.value) / 100);
   api('/seek', { positionSec: newPos }, true);
+});
+els.rewindBtn?.addEventListener('click', async () => {
+  els.audio.pause();
+  const cur = Number(els.audio.currentTime || 0);
+  const newPos = Math.max(0, cur - 5);
+  await api('/seek', { positionSec: newPos }, true);
+});
+// initialize defaults from markup if missing
+if (!els.shuffleToggleBtn.dataset.mode) {
+  els.shuffleToggleBtn.dataset.mode = 'ordered';
+  els.shuffleToggleBtn.textContent = 'Shuffle';
+}
+els.shuffleToggleBtn.addEventListener('click', async () => {
+  const mode = els.shuffleToggleBtn.dataset.mode || 'ordered';
+  if (mode === 'ordered') {
+    await api('/shuffle-queue', {}, true);
+    els.shuffleToggleBtn.dataset.mode = 'shuffled';
+    els.shuffleToggleBtn.textContent = 'Ordered';
+    // showBubble('Shuffled queue');
+  } else {
+    await api('/reset-queue', {}, true);
+    els.shuffleToggleBtn.dataset.mode = 'ordered';
+    els.shuffleToggleBtn.textContent = 'Shuffle';
+    // showBubble('Restored order');
+  }
 });
 
 // Rendering
