@@ -77,6 +77,13 @@ const wallTime = () => (Date.now() / 1000);
 const client_start_time = wallTime();
 
 const playbackOverseer = () => {
+  // trade-off: sync VS stable rhythm
+  const ADJUST = 0.01;
+  const JUMP_THRESHOLD = 0.030;
+
+  // assuming we desire playbackRate === 1
+  const CHILL_THRESHOLD = 0.005;
+
   if (playbackOverseer_ID) {
     clearTimeout(playbackOverseer_ID);
   }
@@ -101,13 +108,13 @@ const playbackOverseer = () => {
       }
       const target = server_wall - playState.wallTimeAtSongStart;
       const delta = target - els.audio.currentTime;
-      if (Math.abs(delta) > 0.5) {
+      if (Math.abs(delta) > JUMP_THRESHOLD) {
         els.audio.currentTime = target;
         els.audio.playbackRate = 1;
         els.audio.play();
         break;
       }
-      if (Math.abs(delta) <= 0.010) {
+      if (Math.abs(delta) <= CHILL_THRESHOLD) {
         els.audio.playbackRate = 1;
         els.audio.play();
         playbackOverseer_ID = setTimeout(
@@ -115,7 +122,6 @@ const playbackOverseer = () => {
         );
         break;
       }
-      const ADJUST = 0.1;
       if (delta > 0) {
         els.audio.playbackRate = 1 + ADJUST;
       } else {
@@ -125,6 +131,7 @@ const playbackOverseer = () => {
       playbackOverseer_ID = setTimeout(
         playbackOverseer, 1000 * Math.abs(delta) * 0.5 / ADJUST, 
       );
+      showBubble('Sneakily adjusting playback...');
       break;
     default:
       console.error('Unknown playState mode:', playState.mode);
