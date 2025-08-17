@@ -109,6 +109,14 @@ const playbackOverseer = () => {
       const target = server_wall - playState.wallTimeAtSongStart;
       const delta = target - els.audio.currentTime;
       if (Math.abs(delta) > JUMP_THRESHOLD) {
+        if (target < 0) {
+          els.audio.currentTime = 0;
+          els.audio.pause();
+          playbackOverseer_ID = setTimeout(
+            playbackOverseer, - target * 1000,
+          );
+          return;
+        }
         els.audio.currentTime = target;
         els.audio.playbackRate = 1;
         els.audio.play();
