@@ -31,3 +31,6 @@ npm run dev
 - Dev-only endpoint: `/debug/state` dumps JSON.
 
 ## todo
+- synchro
+- randomize queue
+- rewind 10 sec

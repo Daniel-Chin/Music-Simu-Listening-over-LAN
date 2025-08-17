@@ -5,9 +5,9 @@ Drafted by GPT-5.
 ## Goal
 
 Multi‑user co‑listening on the same LAN with synchronized
-**event‑based** starts (avoid using clocks). Server hosts files and state;
-clients on Android phones download full files, cache locally, and play in lockstep at
-barrier releases. Anyone can control; race conditions prevented via
+**clock‑based** starts using an NTP‑style session clock. Server hosts files and state;
+clients on Android phones download full files, cache locally, and play in lockstep by
+arming a future start time. Anyone can control; race conditions prevented via
 **eventCount**.
 
 Prioritize simplicity of the implementation.  
@@ -24,12 +24,13 @@ Prioritize simplicity of the implementation.
     -   Persists global state to JSON on every accepted event
         (context‑managed write).
     -   Detects disconnect via **SSE close + heartbeat timeout**.
+    -   Exposes time endpoint `POST /time` for client clock sync.
 -   **Client (HTML+JS, mobile‑first):**
     -   Single‑page app with **three tabs**: *Current Song*, *Queue*, *Sharing*.
     -   `<audio>` element playback from **Blob URLs**.
-    -   Uses **IndexedDB**
-        for whole‑file caching.
+    -   Uses **IndexedDB** for whole‑file caching.
     -   Discovers server via QR (URL) + short random code (pairing).
+    -   Maintains a **session clock** (server time estimate) using NTP‑style pings; uses a tiny **PLL** to keep playback locked.
 
 ------------------------------------------------------------------------
 
@@ -41,16 +42,20 @@ Prioritize simplicity of the implementation.
 -   **Event Topology:** all mutating actions increment `eventCount`.
     Clients must include `eventCount` with every command; server rejects
     mismatches. eventCount is mod 2^14.
+-   **Session Clock:**
+    -   Server time `nowSec = Date.now()/1000`.
+    -   Client estimates offset via repeated `POST /time` round‑trips: `offset = serverNow - (t0+t1)/2`.
+    -   Filters jitter by picking the minimum RTT sample over a small batch; periodically re‑syncs.
+    -   Snapshots/SSE include `serverNowSec` as a hint.
 -   **States:**
-    -   `playing from Xsec` (anchorPositionSec set when the event was
-        emitted; no live clock kept).
-    -   `paused at Ysec`.
-    -   More.
+    -   `playing` with `wallTimeAtSongStart` (WTASS). Position = `sessionNow - WTASS`.
+    -   `paused` with `pausedPositionSec`.
+    -   `onBarrier` (waiting until all active cached).
+    -   `armed` with future `wallTimeAtSongStart` (start at WTASS).
 -   **Barriers:**
-    -   **Track start barrier:** new track starts **only when all
-        members of the active set have fully cached the track**.
-    -   **Late joiners:** excluded from the already‑released barrier;
-        included from the **next** barrier (i.e. next song).
+    -   **Track start barrier:** new track starts only when all
+        active clients have fully cached the track. When barrier is satisfied, the server sets mode `armed` and WTASS in the near future (e.g., +1.2 s).
+    -   **Late joiners:** excluded from the already‑armed/started song; included for the **next** barrier.
 
 ------------------------------------------------------------------------
 
@@ -70,18 +75,19 @@ Map: room code → room state. Keep only what we truly need.
         "eventCount": 42,
         "queue": ["<trackId>", "..."] ,
         "playState": { 
-            "mode": "playing|paused|onBarrier", "anchorPositionSec": 0,
-            "wallTime": 69.69
+            "mode": "playing|paused|onBarrier|armed",
+            "wallTimeAtSongStart": 1723320000.25,
+            "pausedPositionSec": 0
         },
         "clients": {
-            "Alice": { "lastPingSec": 1723320000, "cachedHeadTrackId": "t123" },
-            "Bob": { "lastPingSec": 1723320012, "cachedHeadTrackId": null }
+            "Alice": { "lastPingSec": 1723320000, "cachedHeadTrackId": "t123", "sse": true },
+            "Bob": { "lastPingSec": 1723320012, "cachedHeadTrackId": null, "sse": false }
         }
     }
 }
 ```
 
-Runtime derived (not persisted or cheaply recomputed): active set = clients where `now - lastPingSec <= 6`.
+Runtime derived (not persisted or cheaply recomputed): active set = clients where `sse == true && now - lastPingSec <= 6`.
 
 ### HTTP Endpoints
 
@@ -91,28 +97,27 @@ Runtime derived (not persisted or cheaply recomputed): active set = clients wher
 -   **Discovery & Pairing**
     -   `GET /qr` `{room_code}` → png file of qr code of host url with room code param
 -   **Index & Metadata**
-    -   `GET /index` → queue index
-        `[ {trackId, fileName, size, mime, duration}, ... ]`
+    -   `GET /index` → queue index `[ {trackId, fileName, size, mime, duration}, ... ]`
     -   `GET /cover/:trackId` → image (if embedded art found)
 -   **Files**
     -   `GET /file/:trackId` → full file.
 -   **State & SSE**
-    -   `POST /snapshot` → full snapshot of state described above
+    -   `POST /snapshot` → full snapshot of state described above plus `{serverNowSec}`
     -   `GET /events` (SSE) → pushes on **state change only**:
-        `{event, payload, eventCount}`
+        `{event, payload, eventCount, serverNowSec}`
     -   `POST /ping` `{clientName}` → updates `lastPingSec`
+    -   `POST /time` → `{ nowSec }` (server wall time; for NTP‑style sync)
 -   **Control (all require `If-Match-Event: <eventCount>` header)**
-    -   `POST /play` `{positionSec}` → start/resume
-    -   `POST /pause`
-    -   `POST /seek` `{positionSec}` (no barrier; sets new anchor)
+    -   `POST /play` `{positionSec}` → arms a start in the near future: sets mode `armed` and `wallTimeAtSongStart = now + lead - positionSec`
+    -   `POST /pause` → sets mode `paused`, captures `pausedPositionSec`
+    -   `POST /seek` `{positionSec}` → re‑arm with new target position (`armed` + future WTASS)
     -   `POST /next` `{}`
     -   `POST /prev` `{}`
     -   `POST /nudge` `{trackId}` → move `trackId` to **next-up** position in the queue
-    -   `POST /cache-head` `{trackId}` → client asserts: "I have cached this track" This updates only that client's `cachedHeadTrackId`. (Idempotent; rejected if `trackId` != current queue head.)
+    -   `POST /cache-head` `{trackId}` → client asserts: "I have cached this track" (idempotent; rejected if `trackId` != head)
 
 **Responses:** - `200` on accept → `{eventCount, snapshot}` - `409` on
-`eventCount` mismatch → `{expectedEventCount, snapshot}` (client shows
-warning and refreshes)
+`eventCount` mismatch → `{expectedEventCount, snapshot}`
 
 ### Barrier & Activity Logic
 Each client publishes its *latest cached queue-head track id* via `POST /cache-head` and the server stores it as `clients[clientName].cachedHeadTrackId`.
@@ -121,23 +126,30 @@ Simplify: barrier considers only *active* clients.
 
 - **Active set:** clients with open SSE (`sse == true`) AND fresh ping (`now - lastPingSec <= 6`).
 - **Primary signal:** SSE close → immediately mark client inactive; re‑evaluate barrier.
-- **Heartbeat:** clients `POST /ping` about every ~3 s. If stale (>6 s) treat as inactive.
-- **Per‑client cached marker:** a scalar `cachedHeadTrackId` (may be `null` initially). Client sends this only for the **current queue head** (never anticipating the next track) when it finishes fully caching that file.
-- **Barrier condition:** Let `H = queue[0]`. If for every active client `cachedHeadTrackId == H`, the barrier is considered satisfied and playback may (a) start that track if in `onBarrier` mode or (b) continue uninterrupted if already started. When the barrier is satisfied, the server changes the playState mode from "onBarrier" to "playing".
-- **State changes:** A client updating `cachedHeadTrackId` for the current head triggers evaluation. 
-- **Late joiners:** New active clients that haven't reported the current head naturally hold back the release if it hasn't fired yet. If the track is already playing (release already emitted), their `cachedHeadTrackId` is irrelevant for that already-started track; they just attempt to catch up (may hear mid‑track). They begin participating in the *next* head's barrier once that head becomes queue[0].
-- **Reconnect flow:** Client reopens SSE, pings, fetches snapshot, and (re)issues `cache-head` for the current head once cached. Until then, it's excluded only if release already happened; otherwise it can still delay release.
-
-Rationale: This model removes explicit barrier bookkeeping and racey list mutations; state per client becomes an *idempotent declaration* of the last head they fully possess. The server derives readiness by comparison, enabling simpler recovery and fewer write patterns.
+- **Barrier condition:** all active have `cachedHeadTrackId == queue[0]`.
+- **Release:** When barrier becomes satisfied and mode is `onBarrier`, set mode `armed` and `wallTimeAtSongStart = now + leadSec` (e.g., 1.2 s). Clients start at WTASS.
+- **Late joiners:** if a track is already `armed` or `playing`, they don't affect it; they participate from the next head.
 
 ### Persistence
 
 -   Every accepted control event:
     1)  mutate in‑memory state,
-    2)  **atomic write** to `STATE_FILE` (write temp + fsync + rename),
-    3)  emit SSE with updated `eventCount`.
--   On startup: load state; if corrupt, fatal error. Then, the queue should be updated. First load the playlist from fs. Sort it according to filename. Initiate a new queue by rotating the playlist according to the head item of the old queue in persistent JSON. Goal: capture audio dir changes while keeping listening progress. If head is not found in new playlist, skip rotating. Then, null all cachedHeadTrackId. Then, increment `eventCount`.  
--   Client disconnection is detected via **SSE close** OR **heartbeat timeout (no /ping within 6 s)**.
+    2)  **atomic write** to `STATE_FILE`,
+    3)  emit SSE with updated `eventCount` and `serverNowSec`.
+-   On startup: load state; if corrupt, fatal error. Then, rotate queue against playlist head if possible; null all cachedHeadTrackId. Then, increment `eventCount`.  
+
+### Client PLL and Playback
+
+-   The client keeps a session clock: `sessionNow = Date.now()/1000 + offsetSec`.
+-   Desired position: 
+    -   If `armed`/`playing`: `desired = sessionNow - wallTimeAtSongStart`.
+    -   If `paused`: `desired = pausedPositionSec`.
+-   Control loop (every ~250 ms):
+    -   If `armed` and desired < 0 → pause.
+    -   If `armed` and desired >= 0 → ensure playing.
+    -   Error `e = desired - audio.currentTime`.
+    -   If `|e| > 0.30` → hard seek to `desired`, set `playbackRate=1.0`.
+    -   Else → `playbackRate = clamp(1 + Kp * e, 0.97, 1.03)` with small `Kp` (e.g., 0.02).
 
 ### misc
 - Prints the landing page URL (192.168...) on startup.  
@@ -226,8 +238,6 @@ Rationale: This model removes explicit barrier bookkeeping and racey list mutati
 
 ## Notes / Tradeoffs
 
--   **Almost no clocks:** start alignment is "event‑receipt synchronous";
-    real‑time skew accepted. Audio decoding speed on phone may result in skew when the song is long.  
 -   **HTTP‑only:** SSE for broadcast avoids WebSocket complexity; widely
     supported.
 -   **Minimal recovery:** restart tolerated; JSON state reload ensures

@@ -10,11 +10,50 @@ const serverState = {
   roomState: null,
   snapshot: null,
   index: [],
+  serverNowSec: null,
 };
 const localState = {
   cacheRegistry: {},     // from trackId to blobURL
   recentLRU: [],         // last n played
 };
+
+// Simple session clock using NTP-style ping
+const clock = {
+  offsetSec: 0, // serverNow = Date.now()/1000 + offsetSec
+  rttSec: Infinity,
+};
+const clientNowSec = () => Date.now() / 1000;
+const sessionNowSec = () => clientNowSec() + clock.offsetSec;
+const syncSessionClockOnce = async () => {
+  const t0 = clientNowSec();
+  const r = await fetch('/time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ room, clientName }) }).catch(()=>null);
+  if (!r || !r.ok) return null;
+  const { nowSec } = await r.json();
+  const t1 = clientNowSec();
+  const rtt = Math.max(0, t1 - t0);
+  const offset = nowSec - (t0 + t1) / 2;
+  return { rtt, offset };
+};
+const syncSessionClock = async () => {
+  // take a small batch and pick the min-RTT sample
+  const samples = [];
+  for (let i = 0; i < 5; i++) {
+    const s = await syncSessionClockOnce();
+    if (s) samples.push(s);
+    await new Promise(r => setTimeout(r, 120));
+  }
+  if (samples.length === 0) return;
+  samples.sort((a,b)=>a.rtt-b.rtt);
+  const best = samples[0];
+  // tiny PLL: nudge offset slightly toward best.offset
+  const alpha = 0.2;
+  clock.offsetSec = (1 - alpha) * clock.offsetSec + alpha * best.offset;
+  clock.rttSec = best.rtt;
+};
+
+// kick off periodic time sync
+syncSessionClock().catch(()=>{});
+setInterval(() => { syncSessionClock().catch(()=>{}); }, 15000);
 
 const els = {
   roomLabel: document.getElementById('room-label'),
@@ -90,34 +129,22 @@ const api = async (path, extraBody={}, requireEventHeader=false) => {
 
 const applySnapshot = (snap) => {
   if (!snap) return;
-  const head_change = (
-    ! serverState.roomState
-  ) || (
-    snap.roomState.queue[0] != serverState.roomState.queue[0]
-  );
+  const head_change = (!serverState.roomState) || (snap.roomState.queue[0] != serverState.roomState.queue[0]);
   serverState.snapshot = snap;
   serverState.roomState = snap.roomState;
   serverState.index = snap.index.slice();
+  serverState.serverNowSec = snap.serverNowSec || null;
+  if (serverState.serverNowSec) {
+    // one-step correction toward server hint (very small)
+    const hintOffset = serverState.serverNowSec - clientNowSec();
+    clock.offsetSec = 0.9 * clock.offsetSec + 0.1 * hintOffset;
+  }
   if (head_change) {
     reportCachedHead();
   }
   render();
   maybePrefetchHeadAndNext();
-  // Apply play/paused state anchor
-  const playState = serverState.roomState.playState;
-  const desiredPos = playState.anchorPositionSec || 0;
-  if (playState.mode === 'playing') {
-    if (Math.abs(els.audio.currentTime - desiredPos) >= 0.5) {
-      // avoid unecessary clicks
-      els.audio.currentTime = desiredPos;
-    }
-    els.audio.play().catch(()=>{});
-  } else if (playState.mode === 'paused') {
-    els.audio.currentTime = desiredPos;
-    els.audio.pause();
-  } else if (playState.mode === 'onBarrier') {
-    els.audio.pause();
-  }
+  // no immediate jumps here; PLL loop handles alignment
 };
 
 const connectSSE = () => {
@@ -152,11 +179,11 @@ api('/snapshot')
 // Controls
 els.playPauseBtn.addEventListener('click', async () => {
   const pos = els.audio.currentTime || 0;
-  if (serverState.roomState.playState.mode === 'playing') {
+  if (serverState.roomState.playState.mode === 'playing' || serverState.roomState.playState.mode === 'armed') {
     els.audio.pause();
     await api('/pause', {}, true);
   } else {
-    // don't play, wait for server
+    // arm synchronized start
     await api('/play', { positionSec: pos }, true);
   }
 });
@@ -167,6 +194,7 @@ els.prevBtn.addEventListener('click', async () => {
   await api('/prev', {}, true);
 });
 els.seek.addEventListener('input', (e) => {
+  // local preview while dragging
   const dur = Math.max(1, els.audio.duration || 1);
   const newPos = dur * (Number(e.target.value) / 100);
   els.audio.currentTime = newPos;
@@ -257,24 +285,32 @@ const renderStatus = () => {
   const activeCount = Object.values(serverState.roomState.clients || {}).filter(c => c.sse && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
   const head = serverState.roomState.queue[0];
   const readyCount = Object.values(serverState.roomState.clients || {}).filter(c => c.sse && c.cachedHeadTrackId === head && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
-  if (serverState.roomState.playState.mode === 'onBarrier') {
+
+  const ps = serverState.roomState.playState || {};
+  if (ps.mode === 'onBarrier') {
     const haveHead = head && (head in localState.cacheRegistry);
     if (haveHead) {
       els.statusLine.textContent = `waiting for others to download... (${readyCount}/${activeCount} ready)`;
     } else {
       els.statusLine.textContent = 'downloading...';
     }
-  } else if (serverState.roomState.playState.mode === 'playing') {
+  } else if (ps.mode === 'armed') {
+    const secs = Math.max(0, (ps.wallTimeAtSongStart || 0) - sessionNowSec());
+    els.statusLine.textContent = `Starting in ${secs.toFixed(1)}s`;
+  } else if (ps.mode === 'playing') {
     els.statusLine.textContent = `Playing at ${formatTime(els.audio.currentTime)}`;
   } else {
-    els.statusLine.textContent = `Paused at ${formatTime(serverState.roomState.playState.anchorPositionSec)}`;
+    els.statusLine.textContent = `Paused at ${formatTime(ps.pausedPositionSec || 0)}`;
   }
-  switch (serverState.roomState.playState.mode) {
+  switch (ps.mode) {
     case 'playing':
       playPauseBtn.textContent = '⏸️';
       break;
     case 'paused':
       playPauseBtn.textContent = '▶️';
+      break;
+    case 'armed':
+      playPauseBtn.textContent = '⏳';
       break;
     case 'onBarrier':
       playPauseBtn.textContent = '...';
@@ -442,13 +478,56 @@ els.audio.addEventListener('ended', async () => {
   await api('/next', {}, true);
 });
 
-// Keep seek bar in sync
+// Tiny PLL loop: keep audio locked to session clock
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 setInterval(() => {
+  if (!serverState.roomState) return;
+  const ps = serverState.roomState.playState || {};
+  // desired position computed from session clock
+  let desired = null;
+  if (ps.mode === 'playing' || ps.mode === 'armed') {
+    if (typeof ps.wallTimeAtSongStart === 'number') {
+      desired = sessionNowSec() - ps.wallTimeAtSongStart;
+    }
+  } else if (ps.mode === 'paused') {
+    desired = ps.pausedPositionSec || 0;
+  }
+
   const dur = els.audio.duration || 0;
   const cur = els.audio.currentTime || 0;
-  if (dur > 0) els.seek.value = String(Math.round(cur / dur * 100));
+
+  if (ps.mode === 'armed') {
+    if (desired !== null && desired >= 0) {
+      if (Math.abs(cur - desired) > 0.3) els.audio.currentTime = Math.max(0, desired);
+      els.audio.play().catch(()=>{});
+    } else {
+      els.audio.pause();
+    }
+  } else if (ps.mode === 'playing') {
+    if (desired !== null) {
+      const e = desired - cur;
+      if (Math.abs(e) > 0.3) {
+        els.audio.playbackRate = 1.0;
+        els.audio.currentTime = Math.max(0, desired);
+      } else {
+        const Kp = 0.02;
+        els.audio.playbackRate = clamp(1 + Kp * e, 0.97, 1.03);
+      }
+      // ensure playing
+      els.audio.play().catch(()=>{});
+    }
+  } else if (ps.mode === 'paused') {
+    if (desired !== null && Math.abs(cur - desired) > 0.05) {
+      els.audio.currentTime = Math.max(0, desired);
+    }
+    els.audio.playbackRate = 1.0;
+    els.audio.pause();
+  }
+
+  // seek UI
+  if (dur > 0) els.seek.value = String(Math.round((els.audio.currentTime || 0) / dur * 100));
   renderStatus();
-}, 500);
+}, 250);
 
 // Safe storage estimate helper (handles browsers without navigator.storage)
 const safeStorageEstimate = async () => {

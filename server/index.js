@@ -20,6 +20,9 @@ let playlist = [];
 let rooms = {};  // map room_code -> room state
 const sseStreams = new Map(); // room_code => Map(clientName => res)
 
+// arm lead for synchronized starts
+const ARM_LEAD_SEC = 1.2;
+
 const boot = async () => {
   const loaded = await loadState();
   rooms = loaded.state || {};
@@ -54,22 +57,6 @@ const handleJoin = (req, res, next) => {
 
 app.use(handleJoin);
 
-const advanceTime = (req, res, next) => {
-  const room = req.body.room;
-  if (room) {
-    const rs = getRoomState(room, res);
-    if (rs.playState.mode === 'playing') {
-      const oldTime = rs.playState.anchorPositionSec;
-      const elapsed = Date.now() / 1000 - (rs.playState.wallTime || 0);
-      rs.playState.anchorPositionSec = Math.max(0, oldTime + elapsed);
-      rs.playState.wallTime = Date.now() / 1000;
-    }
-  }
-  next();
-};
-
-app.use(advanceTime);
-
 const getRoomState = (room_code, res) => {
   if (!rooms[room_code]) {
     res.status(404).send('room not found').end();
@@ -77,6 +64,14 @@ const getRoomState = (room_code, res) => {
   } else {
     return rooms[room_code];
   }
+};
+
+const fullSnapshot = (rs) => {
+  return {
+    roomState: rs,
+    index: playlist,
+    serverNowSec: Date.now() / 1000,
+  };
 };
 
 const pushSSE = (room_code, rs) => {
@@ -91,13 +86,6 @@ const pushSSE = (room_code, rs) => {
       // ignore broken pipe
     }
   }
-};
-
-const fullSnapshot = (rs) => {
-  return {
-    roomState: rs,
-    index: playlist,
-  };
 };
 
 const afterEvent = (room_code, rs) => {
@@ -180,6 +168,7 @@ app.post('/snapshot', (req, res) => {
   res.json(fullSnapshot(rs));
 });
 
+// SSE
 app.get('/events', (req, res) => {
   const room = (req.query.room || '').toString();
   const clientName = (req.query.clientName || '').toString();
@@ -198,17 +187,28 @@ app.get('/events', (req, res) => {
   if (!sseStreams.has(room)) sseStreams.set(room, new Map());
   sseStreams.get(room).set(clientName, res);
 
+  // mark client's SSE present
+  rs.clients[clientName] = rs.clients[clientName] || { lastPingSec: nowSec(), cachedHeadTrackId: null };
+  rs.clients[clientName].sse = true;
+
   req.on('close', () => {
     // SSE closed
     sseStreams.get(room)?.delete(clientName);
+    if (rs.clients[clientName]) rs.clients[clientName].sse = false;
     // Re-evaluate barrier (primary signal is SSE close)
     if (rs.playState?.mode === 'onBarrier' && barrierSatisfied(rs)) {
-      rs.playState.mode = 'playing';
+      // arm a future start
+      rs.playState = { mode: 'armed', wallTimeAtSongStart: Date.now() / 1000 + ARM_LEAD_SEC, pausedPositionSec: 0 };
       afterEvent(room, rs);
     } else {
       saveState(rooms);
     }
   });
+});
+
+// Time sync for session clock
+app.post('/time', (req, res) => {
+  res.json({ nowSec: Date.now() / 1000 });
 });
 
 app.post('/ping', (req, res) => {
@@ -236,10 +236,12 @@ app.post('/play', (req, res) => {
   const { room, positionSec } = req.body || {};
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
+  const pos = Math.max(0, Number(positionSec) || 0);
+  const startAt = Date.now() / 1000 + ARM_LEAD_SEC;
   rs.playState = {
-    mode: 'playing', 
-    anchorPositionSec: Math.max(0, Number(positionSec) || 0),
-    wallTime: Date.now() / 1000
+    mode: 'onBarrier',
+    wallTimeAtSongStart: startAt - pos,
+    pausedPositionSec: 0
   };
   afterEvent(room, rs);
   res.json({ ok: true });
@@ -249,7 +251,12 @@ app.post('/pause', (req, res) => {
   const { room } = req.body || {};
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
-  rs.playState.mode = 'paused';
+  // compute current position from WTASS if available; otherwise keep previous pausedPositionSec
+  let curPos = rs.playState?.pausedPositionSec || 0;
+  if (rs.playState?.wallTimeAtSongStart && (rs.playState.mode === 'playing' || rs.playState.mode === 'armed')) {
+    curPos = Math.max(0, (Date.now() / 1000) - rs.playState.wallTimeAtSongStart);
+  }
+  rs.playState = { mode: 'paused', wallTimeAtSongStart: null, pausedPositionSec: curPos };
   afterEvent(room, rs);
   res.json({ ok: true });
 });
@@ -258,7 +265,13 @@ app.post('/seek', (req, res) => {
   const { room, positionSec } = req.body || {};
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
-  rs.playState.anchorPositionSec = Math.max(0, Number(positionSec) || 0);
+  const pos = Math.max(0, Number(positionSec) || 0);
+  const startAt = Date.now() / 1000 + ARM_LEAD_SEC;
+  rs.playState = {
+    mode: 'armed',
+    wallTimeAtSongStart: startAt - pos,
+    pausedPositionSec: 0
+  };
   afterEvent(room, rs);
   res.json({ ok: true });
 });
@@ -268,10 +281,11 @@ const rotateQueue = (rs, is_next_not_prev) => {
     const head = rs.queue.shift();
     rs.queue.push(head);
   } else {
-    const tail = rt.queue.pop();
-    rt.queue.unshift(tail);
+    const tail = rs.queue.pop();
+    rs.queue.unshift(tail);
   }
-  rs.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
+  // new head: wait for barrier first
+  rs.playState = { mode: 'onBarrier', wallTimeAtSongStart: null, pausedPositionSec: 0 };
   // null all cached markers (clients must re-assert for new head)
   for (const c of Object.values(rs.clients)) c.cachedHeadTrackId = null;
 };
@@ -319,11 +333,15 @@ app.post('/cache-head', (req, res) => {
 
   const c = rs.clients[clientName];
   if (!c) return res.status(404).json({ error: `client ${clientName} not found` });
+  // only accept mark for current head
+  if (rs.queue[0] !== trackId) {
+    return res.status(400).json({ error: 'trackId is not current head' });
+  }
   c.cachedHeadTrackId = trackId;
   
-  // Evaluate barrier, and if satisfied and currently onBarrier, release
+  // Evaluate barrier; if satisfied and currently onBarrier, arm a future start
   if (rs.playState?.mode === 'onBarrier' && barrierSatisfied(rs)) {
-    rs.playState.mode = 'playing';
+    rs.playState = { mode: 'armed', wallTimeAtSongStart: Date.now() / 1000 + ARM_LEAD_SEC, pausedPositionSec: 0 };
   }
   afterEvent(room, rs);
   res.json({ ok: true });
