@@ -405,7 +405,9 @@ const renderStatus = () => {
       els.statusLine.textContent = 'downloading...';
     }
   } else if (serverState.roomState.playState.mode === 'playing') {
-    els.statusLine.textContent = `Playing at ${formatTime(els.audio.currentTime)}`;
+    const resid = Math.round(els.audio.currentTime) % 2;
+    const cursor = resid ? '' : '    ...';  // for visual inspection of sync
+    els.statusLine.textContent = `Playing at ${formatTime(els.audio.currentTime)}${cursor}`;
   } else {
     els.statusLine.textContent = `Paused at ${formatTime(els.audio.currentTime)}`;
   }
