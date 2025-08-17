@@ -221,6 +221,10 @@ app.post('/ping', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/time', (req, res) => {
+  res.json(wallTime());
+});
+
 const playSong = (rs) => {
   rs.playState = {
     mode: 'playing',

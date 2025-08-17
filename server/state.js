@@ -1,8 +1,22 @@
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import readline from 'node:readline';
 import { EVENT_MODULO, STATE_FILE, AUDIO_DIR } from './config.js';
 import { buildPlaylistIndex } from './tracks.js';
+
+const askUser = function (query) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise(resolve => {
+    rl.question(query, answer => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+};
+
 
 const writeAtomic = (filePath, data) => {
   const tmp = filePath + '.tmp';
@@ -26,12 +40,19 @@ export const newRoomState = (queue) => ({
 export const loadState = async () => {
   let state = {};
   if (fs.existsSync(STATE_FILE)) {
+    const txt = fs.readFileSync(STATE_FILE, 'utf8');
     try {
-      const txt = fs.readFileSync(STATE_FILE, 'utf8');
       state = JSON.parse(txt);
     } catch (e) {
-      console.error('Fatal: corrupted state:', e);
-      process.exit(1);
+      console.error(`${STATE_FILE} corrupted. File content:`);
+      console.log('"""');
+      console.log(txt);
+      console.log('"""');
+      const do_wipe = await askUser('Wipe state? y/n > ') === 'y';
+      if (! do_wipe) {
+        console.log('ok Bye');
+        process.exit(1);
+      }
     }
   }
   // Build fresh playlist

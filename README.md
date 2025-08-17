@@ -31,3 +31,4 @@ npm run dev
 - Dev-only endpoint: `/debug/state` dumps JSON.
 
 ## todo
+- bug: server time offset still wrong

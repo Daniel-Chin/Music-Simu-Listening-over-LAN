@@ -23,7 +23,14 @@ header {
     background: #111827;
     position: sticky;
     top: 0;
-    z-index: 10
+    z-index: 10;
+    display: grid;
+    grid-auto-flow: column;
+    justify-content: space-between;
+}
+
+#rtl {
+    font-size: smaller;
 }
 
 main {
@@ -176,7 +183,7 @@ input[type=range] {
 
 #qr-img {
     width: 100%;
-    max-height: 70vh;
+    max-height: 50vh;
     object-fit: contain;
     border-radius: 12px;
     image-rendering: pixelated;

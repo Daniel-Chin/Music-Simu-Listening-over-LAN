@@ -16,7 +16,7 @@ const localState = {
   recentLRU: [],         // last n played
 };
 
-let playbackOverseerID = null;
+let playbackOverseer_ID = null;
 
 const els = {
   roomLabel: document.getElementById('room-label'),
@@ -37,6 +37,7 @@ const els = {
   roomCode: document.getElementById('room-code'),
   membersList: document.getElementById('members-list'),
   changeNameBtn: document.getElementById('changeNameBtn'),
+  rtlDiv: document.getElementById('rtl'),
 };
 
 els.roomLabel.textContent = room;
@@ -68,8 +69,14 @@ const showBubble = (msg) => {
 };
 const findIndexItem = (trackId) => serverState.index.find(x => x.trackId === trackId) || null;
 
+const wallTime = () => (Date.now() / 1000);
+
+const client_start_time = wallTime();
+
 const playbackOverseer = () => {
-  clearTimeout(playbackOverseerID);
+  if (playbackOverseer_ID) {
+    clearTimeout(playbackOverseer_ID);
+  }
   const playState = serverState?.roomState?.playState;
   if (! playState) return;
   switch (playState.mode) {
@@ -81,21 +88,39 @@ const playbackOverseer = () => {
       els.audio.currentTime = playState.songTimeAtPause;
       break;
     case 'playing':
-      const target = serverWallTime() - playState.wallTimeAtSongStart;
+      const server_wall = serverWallTime();
+      if (! server_wall) {
+        console.warn('NTP_buf not full yet');
+        playbackOverseer_ID = setTimeout(
+          playbackOverseer, 500, 
+        );  // retry
+        return;
+      }
+      const target = server_wall - playState.wallTimeAtSongStart;
       const delta = target - els.audio.currentTime;
       if (Math.abs(delta) > 0.5) {
         els.audio.currentTime = target;
+        els.audio.playbackRate = 1;
+        els.audio.play();
         break;
       }
-      if (Math.abs(delta) <= 0.010) break;
+      if (Math.abs(delta) <= 0.010) {
+        els.audio.playbackRate = 1;
+        els.audio.play();
+        playbackOverseer_ID = setTimeout(
+          playbackOverseer, 1000 * 10, 
+        );
+        break;
+      }
       const ADJUST = 0.1;
       if (delta > 0) {
         els.audio.playbackRate = 1 + ADJUST;
       } else {
         els.audio.playbackRate = 1 - ADJUST;
       }
-      playbackOverseerID = setTimeout(
-        playbackOverseer, Math.abs(delta) * 0.5 / ADJUST, 
+      els.audio.play();
+      playbackOverseer_ID = setTimeout(
+        playbackOverseer, 1000 * Math.abs(delta) * 0.5 / ADJUST, 
       );
       break;
     default:
@@ -143,6 +168,68 @@ const applySnapshot = (snap) => {
   playbackOverseer();
 };
 
+const NTP_BUF_SIZE = 20;
+const NTP_INTERVAL_SEC = 5;
+
+let NTP_like_sync_ID = null;
+const NTP_buf = [];
+
+const NTP_like_sync = async () => {
+  if (NTP_like_sync_ID) {
+    clearTimeout(NTP_like_sync_ID);
+  }
+  const start = wallTime();
+  const reported_server_time = await api('/time');
+  const end = wallTime();
+  const rtl = end - start;
+  const server_time_now = reported_server_time + rtl * 0.5;
+  const offset = server_time_now - wallTime();
+  NTP_buf.push({
+    offset,
+    rtl,
+  });
+  if (NTP_buf.length > NTP_BUF_SIZE) {
+    NTP_buf.shift();
+    NTP_like_sync_ID = setTimeout(NTP_like_sync, NTP_INTERVAL_SEC * 1000);
+  } else {
+    NTP_like_sync_ID = setTimeout(NTP_like_sync, 1);
+  }
+  els.rtlDiv.textContent = 'RTL: ' + diagnoseRTL();
+};
+
+const serverWallTime = () => {
+  if (NTP_buf.length < NTP_BUF_SIZE) {
+    return null;
+  }
+  const best = NTP_buf.reduce((acc, current) => {
+    const weight_acc = acc.rtl < current.rtl ? 1 : (
+      acc.rtl === current.rtl ? 0.5 : 0
+    );
+    const weight_current = 1 - weight_acc;
+    return {
+      offset: weight_acc * acc.offset + weight_current * current.offset,
+      rtl:    weight_acc * acc.rtl    + weight_current * current.rtl,
+    };
+  });
+  return wallTime() + best.offset;
+};
+
+const diagnoseRTL = () => {
+  if (NTP_buf.length < NTP_BUF_SIZE) {
+    return `measuring ${NTP_buf.length} / ${NTP_BUF_SIZE}`;
+  }
+  const results = NTP_buf.reduce(({min, max, sum}, {rtl}) => ({
+    min: Math.min(min, rtl),
+    max: Math.max(max, rtl),
+    sum: sum + rtl,
+  }), {min: Infinity, max: -Infinity, sum: 0});
+  const avg = results.sum / NTP_BUF_SIZE;
+  const radius = (results.max - results.min) * 0.5;
+  const displayMs = (x) => (Math.round(x * 1000));
+  // return `${displayMs(avg)} ± ${displayMs(radius)} ms`;
+  return `${displayMs(results.min)} ~ ${displayMs(results.max)} ms`;
+};
+
 const connectSSE = () => {
   const url = new URL('/events', location.origin);
   url.searchParams.set('room', room);
@@ -170,11 +257,11 @@ setInterval(() => {
 // Initial snapshot
 api('/snapshot')
   .then(applySnapshot)
-  .then(connectSSE);
+  .then(connectSSE)
+  .then(NTP_like_sync);
 
 // Controls
 els.playPauseBtn.addEventListener('click', async () => {
-  const pos = els.audio.currentTime || 0;
   if (serverState.roomState.playState.mode === 'playing') {
     els.audio.pause();
     await api('/pause', {}, true);
@@ -190,14 +277,10 @@ els.prevBtn.addEventListener('click', async () => {
   await api('/prev', {}, true);
 });
 els.seek.addEventListener('input', (e) => {
+  els.audio.pause();
   const dur = Math.max(1, els.audio.duration || 1);
   const newPos = dur * (Number(e.target.value) / 100);
-  els.audio.currentTime = newPos;
-  els.audio.pause();
-});
-els.seek.addEventListener('change', async () => {
-  const pos = els.audio.currentTime || 0;
-  await api('/seek', { positionSec: pos }, true);
+  api('/seek', { positionSec: newPos }, true);
 });
 
 // Rendering
@@ -231,7 +314,7 @@ const renderMembers = () => {
   if (!els.membersList) return;
   els.membersList.innerHTML = '';
   const clients = Object.entries(serverState.roomState.clients || {});
-  const nowSec = Date.now() / 1000;
+  const nowSec = wallTime();
   const head = serverState.roomState.queue[0];
   clients
     .sort((a,b)=>a[0].localeCompare(b[0]))
@@ -277,9 +360,12 @@ const formatTime = (t) => {
 };
 
 const renderStatus = () => {
-  const activeCount = Object.values(serverState.roomState.clients || {}).filter(c => c.sse && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
+  const isHere = (c) =>(
+    c.sse && (wallTime() - (c.lastPingSec||0) <= 6)
+  );
   const head = serverState.roomState.queue[0];
-  const readyCount = Object.values(serverState.roomState.clients || {}).filter(c => c.sse && c.cachedHeadTrackId === head && (Date.now()/1000 - (c.lastPingSec||0) <= 6)).length;
+  const activeCount = Object.values(serverState.roomState.clients || {}).filter(isHere).length;
+  const readyCount  = Object.values(serverState.roomState.clients || {}).filter(c => (isHere(c) && c.cachedHeadTrackId === head)).length;
   if (serverState.roomState.playState.mode === 'onBarrier') {
     const haveHead = head && (head in localState.cacheRegistry);
     if (haveHead) {
