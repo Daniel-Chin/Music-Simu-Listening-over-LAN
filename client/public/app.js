@@ -16,6 +16,8 @@ const localState = {
   recentLRU: [],         // last n played
 };
 
+let playbackOverseerID = null;
+
 const els = {
   roomLabel: document.getElementById('room-label'),
   cover: document.getElementById('cover'),
@@ -66,6 +68,41 @@ const showBubble = (msg) => {
 };
 const findIndexItem = (trackId) => serverState.index.find(x => x.trackId === trackId) || null;
 
+const playbackOverseer = () => {
+  clearTimeout(playbackOverseerID);
+  const playState = serverState?.roomState?.playState;
+  if (! playState) return;
+  switch (playState.mode) {
+    case 'onBarrier':
+      els.audio.pause().catch(()=>{});
+      break;
+    case 'paused':
+      els.audio.pause();
+      els.audio.currentTime = playState.songTimeAtPause;
+      break;
+    case 'playing':
+      const target = serverWallTime() - playState.wallTimeAtSongStart;
+      const delta = target - els.audio.currentTime;
+      if (Math.abs(delta) > 0.5) {
+        els.audio.currentTime = target;
+        break;
+      }
+      if (Math.abs(delta) <= 0.010) break;
+      const ADJUST = 0.1;
+      if (delta > 0) {
+        els.audio.playbackRate = 1 + ADJUST;
+      } else {
+        els.audio.playbackRate = 1 - ADJUST;
+      }
+      playbackOverseerID = setTimeout(
+        playbackOverseer, Math.abs(delta) * 0.5 / ADJUST, 
+      );
+      break;
+    default:
+      console.error('Unknown playState mode:', playState.mode);
+  }
+};
+
 // Networking primitives
 const api = async (path, extraBody={}, requireEventHeader=false) => {
   const headers = { 'Content-Type': 'application/json' };
@@ -103,21 +140,7 @@ const applySnapshot = (snap) => {
   }
   render();
   maybePrefetchHeadAndNext();
-  // Apply play/paused state anchor
-  const playState = serverState.roomState.playState;
-  const desiredPos = playState.anchorPositionSec || 0;
-  if (playState.mode === 'playing') {
-    if (Math.abs(els.audio.currentTime - desiredPos) >= 0.5) {
-      // avoid unecessary clicks
-      els.audio.currentTime = desiredPos;
-    }
-    els.audio.play().catch(()=>{});
-  } else if (playState.mode === 'paused') {
-    els.audio.currentTime = desiredPos;
-    els.audio.pause();
-  } else if (playState.mode === 'onBarrier') {
-    els.audio.pause();
-  }
+  playbackOverseer();
 };
 
 const connectSSE = () => {
@@ -157,7 +180,7 @@ els.playPauseBtn.addEventListener('click', async () => {
     await api('/pause', {}, true);
   } else {
     // don't play, wait for server
-    await api('/play', { positionSec: pos }, true);
+    await api('/play', {}, true);
   }
 });
 els.nextBtn.addEventListener('click', async () => {
@@ -267,7 +290,7 @@ const renderStatus = () => {
   } else if (serverState.roomState.playState.mode === 'playing') {
     els.statusLine.textContent = `Playing at ${formatTime(els.audio.currentTime)}`;
   } else {
-    els.statusLine.textContent = `Paused at ${formatTime(serverState.roomState.playState.anchorPositionSec)}`;
+    els.statusLine.textContent = `Paused at ${formatTime(els.audio.currentTime)}`;
   }
   switch (serverState.roomState.playState.mode) {
     case 'playing':

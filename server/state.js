@@ -19,7 +19,7 @@ export const nowSec = () => Math.floor(Date.now() / 1000);
 export const newRoomState = (queue) => ({
   eventCount: 0,
   queue,
-  playState: { mode: 'paused', anchorPositionSec: 0, wallTime: Date.now() / 1000 },
+  playState: { mode: 'paused', wallTimeAtSongStart: null, songTimeAtPause: 0 },
   clients: {},
 });
 
@@ -57,7 +57,6 @@ export const loadState = async () => {
       c.cachedHeadTrackId = null;
     }
     rs.eventCount = (rs.eventCount + 1) % EVENT_MODULO;
-    if (!rs.playState) rs.playState = { mode: 'paused', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
   }
   return { state, playlist };
 };

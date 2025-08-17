@@ -70,8 +70,8 @@ Map: room code → room state. Keep only what we truly need.
         "eventCount": 42,
         "queue": ["<trackId>", "..."] ,
         "playState": { 
-            "mode": "playing|paused|onBarrier", "anchorPositionSec": 0,
-            "wallTime": 69.69
+            "mode": "playing|paused|onBarrier", "wallTimeAtSongStart": 69.69,
+            "songTimeAtPause": 23.33
         },
         "clients": {
             "Alice": { "lastPingSec": 1723320000, "cachedHeadTrackId": "t123" },

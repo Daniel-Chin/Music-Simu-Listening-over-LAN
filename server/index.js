@@ -10,6 +10,8 @@ import mime from 'mime';
 import { PORT, AUDIO_DIR, ROOM_CODE_LENGTH, HEARTBEAT_SEC, DEV_MODE } from './config.js';
 import { loadState, saveState, newRoomState, bumpEvent, nowSec, barrierSatisfied } from './state.js';
 
+const LEAD_AGAINST_LATENCY = 0.5;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
@@ -32,6 +34,8 @@ const boot = async () => {
   printLandingURL();
 };
 
+const wallTime = () => (Date.now() / 1000);
+
 // Helpers
 const randomRoomCode = () => nanoid(ROOM_CODE_LENGTH).toLowerCase().replace(/[^a-z0-9]/g,'');
 
@@ -53,22 +57,6 @@ const handleJoin = (req, res, next) => {
 };
 
 app.use(handleJoin);
-
-const advanceTime = (req, res, next) => {
-  const room = req.body.room;
-  if (room) {
-    const rs = getRoomState(room, res);
-    if (rs.playState.mode === 'playing') {
-      const oldTime = rs.playState.anchorPositionSec;
-      const elapsed = Date.now() / 1000 - (rs.playState.wallTime || 0);
-      rs.playState.anchorPositionSec = Math.max(0, oldTime + elapsed);
-      rs.playState.wallTime = Date.now() / 1000;
-    }
-  }
-  next();
-};
-
-app.use(advanceTime);
 
 const getRoomState = (room_code, res) => {
   if (!rooms[room_code]) {
@@ -180,6 +168,12 @@ app.post('/snapshot', (req, res) => {
   res.json(fullSnapshot(rs));
 });
 
+const updateBarrier = (rs) => {
+  if (rs.playState.mode === 'onBarrier' && barrierSatisfied(rs)) {
+    playSong(rs);
+  }
+};
+
 app.get('/events', (req, res) => {
   const room = (req.query.room || '').toString();
   const clientName = (req.query.clientName || '').toString();
@@ -202,17 +196,13 @@ app.get('/events', (req, res) => {
     // SSE closed
     sseStreams.get(room)?.delete(clientName);
     // Re-evaluate barrier (primary signal is SSE close)
-    if (rs.playState?.mode === 'onBarrier' && barrierSatisfied(rs)) {
-      rs.playState.mode = 'playing';
-      afterEvent(room, rs);
-    } else {
-      saveState(rooms);
-    }
+    updateBarrier(rs);
+    afterEvent(room, rs);
   });
 });
 
 app.post('/ping', (req, res) => {
-  const { clientName, room } = req.body || {};
+  const { clientName, room } = req.body;
   const rs = getRoomState(room, res);
   const c = rs.clients[clientName];
   if (c) c.lastPingSec = nowSec();
@@ -231,36 +221,91 @@ app.post('/ping', (req, res) => {
   res.json({ ok: true });
 });
 
+const playSong = (rs) => {
+  rs.playState = {
+    mode: 'playing',
+    wallTimeAtSongStart: wallTime() - rs.playState.songTimeAtPause + LEAD_AGAINST_LATENCY,
+    songTimeAtPause: null,
+  };
+};
+
 // Control (requires If-Match-Event)
 app.post('/play', (req, res) => {
-  const { room, positionSec } = req.body || {};
+  const { room } = req.body;
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
-  rs.playState = {
-    mode: 'playing', 
-    anchorPositionSec: Math.max(0, Number(positionSec) || 0),
-    wallTime: Date.now() / 1000
-  };
-  afterEvent(room, rs);
-  res.json({ ok: true });
+  switch (rs.playState.mode) {
+    case 'playing':
+      res.end('Already playing');
+      return;
+    case 'onBarrier':
+      res.end('Not so fast');
+      return;
+    case 'paused':
+      playSong(rs);
+      afterEvent(room, rs);
+      res.json({ ok: true });
+      return;
+    default:
+      console.error(`Unknown play state: ${rs.playState.mode}`);
+      return;
+  }
 });
 
 app.post('/pause', (req, res) => {
-  const { room } = req.body || {};
+  const { room } = req.body;
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
-  rs.playState.mode = 'paused';
-  afterEvent(room, rs);
-  res.json({ ok: true });
+  switch (rs.playState.mode) {
+    case 'playing':
+      rs.playState = {
+        mode: 'paused',
+        wallTimeAtSongStart: null,
+        songTimeAtPause: wallTime() - rs.playState.wallTimeAtSongStart,
+      };
+      afterEvent(room, rs);
+      res.json({ ok: true });
+      return;
+    case 'onBarrier':
+      res.end('Not so fast');
+      return;
+    case 'paused':
+      res.end('already paused');
+      return;
+    default:
+      console.error(`Unknown play state: ${rs.playState.mode}`);
+  }
 });
 
 app.post('/seek', (req, res) => {
-  const { room, positionSec } = req.body || {};
+  const { room, positionSec } = req.body;
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
-  rs.playState.anchorPositionSec = Math.max(0, Number(positionSec) || 0);
-  afterEvent(room, rs);
-  res.json({ ok: true });
+  switch (rs.playState.mode) {
+    case 'onBarrier':
+      res.end('Not so fast');
+      return;
+    case 'playing':
+      rs.playState = {
+        mode: 'playing',
+        wallTimeAtSongStart: wallTime() - positionSec + LEAD_AGAINST_LATENCY,
+        songTimeAtPause: null,
+      };
+      afterEvent(room, rs);
+      res.json({ ok: true });
+      return;
+    case 'paused':
+      rs.playState = {
+        mode: 'paused',
+        wallTimeAtSongStart: null,
+        songTimeAtPause: positionSec,
+      }
+      afterEvent(room, rs);
+      res.json({ ok: true });
+      return;
+    default:
+      console.error(`Unknown play state: ${rs.playState.mode}`);
+  }
 });
 
 const rotateQueue = (rs, is_next_not_prev) => {
@@ -271,13 +316,17 @@ const rotateQueue = (rs, is_next_not_prev) => {
     const tail = rt.queue.pop();
     rt.queue.unshift(tail);
   }
-  rs.playState = { mode: 'onBarrier', anchorPositionSec: 0, wallTime: Date.now() / 1000 };
+  rs.playState = {
+    mode: 'onBarrier', 
+    wallTimeAtSongStart: null,
+    songTimeAtPause: 0,
+  };
   // null all cached markers (clients must re-assert for new head)
   for (const c of Object.values(rs.clients)) c.cachedHeadTrackId = null;
 };
 
 app.post('/next', (req, res) => {
-  const { room } = req.body || {};
+  const { room } = req.body;
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
 
@@ -288,7 +337,7 @@ app.post('/next', (req, res) => {
 });
 
 app.post('/prev', (req, res) => {
-  const { room } = req.body || {};
+  const { room } = req.body;
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
 
@@ -299,7 +348,7 @@ app.post('/prev', (req, res) => {
 });
 
 app.post('/nudge', (req, res) => {
-  const { room, trackId } = req.body || {};
+  const { room, trackId } = req.body;
   const rs = getRoomState(room, res);
   if (!checkEventCount(req, res, rs)) return;
 
@@ -314,7 +363,7 @@ app.post('/nudge', (req, res) => {
 });
 
 app.post('/cache-head', (req, res) => {
-  const { room, clientName, trackId } = req.body || {};
+  const { room, clientName, trackId } = req.body;
   const rs = getRoomState(room, res);
 
   const c = rs.clients[clientName];
@@ -322,9 +371,7 @@ app.post('/cache-head', (req, res) => {
   c.cachedHeadTrackId = trackId;
   
   // Evaluate barrier, and if satisfied and currently onBarrier, release
-  if (rs.playState?.mode === 'onBarrier' && barrierSatisfied(rs)) {
-    rs.playState.mode = 'playing';
-  }
+  updateBarrier(rs);
   afterEvent(room, rs);
   res.json({ ok: true });
 });
