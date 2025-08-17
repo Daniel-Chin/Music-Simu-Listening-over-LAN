@@ -396,16 +396,31 @@ const renderQueue = () => {
     const it = findIndexItem(trackId);
     const li = document.createElement('li');
     const left = document.createElement('div');
-    left.textContent = `${i===0?'▶ ':'  '}${(it?.title)||'Unknown'} · ${(it?.artist)||''} · ${(it?.duration||0).toFixed(0)}s`;
+    const title = (it?.title)||'Untitled';
+    const artist = (it?.artist)||'Unknown artist';
+    const duration = formatTime(it?.duration||0);
+    const upSpan = document.createElement('span');
+    upSpan.textContent = title;
+    left.appendChild(upSpan);
+    left.appendChild(document.createElement('br'));
+    const downSpan = document.createElement('span');
+    downSpan.textContent = `${artist} · ${duration}`;
+    left.appendChild(downSpan);
     li.appendChild(left);
-    const btn = document.createElement('button');
-    btn.textContent = 'Play next';
-    btn.disabled = i === 0;
-    btn.addEventListener('click', async () => {
-      await api('/nudge', { trackId }, true);
-    });
-    li.appendChild(btn);
+    if (i >= 2) {
+      const btn = document.createElement('button');
+      btn.textContent = '🔝';
+      btn.className = 'btnNudge'
+      btn.disabled = i === 0;
+      btn.addEventListener('click', async () => {
+        await api('/nudge', { trackId }, true);
+      });
+      li.appendChild(btn);
+    }
     els.queueList.appendChild(li);
+    if (i === 0) li.classList.add('headItem');
+    const hr = document.createElement('hr');
+    els.queueList.appendChild(hr);
   });
 };
 

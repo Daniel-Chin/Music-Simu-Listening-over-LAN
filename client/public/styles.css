@@ -76,12 +76,6 @@ h1 {
     font-size: 14px
 }
 
-.controls {
-    display: flex;
-    gap: 12px;
-    margin: 12px 0
-}
-
 input[type=range] {
     width: 100%
 }
@@ -107,7 +101,7 @@ input[type=range] {
 
 .tab {
     display: none;
-    padding: 12px 16px
+    padding: 0;
 }
 
 .tab.active {
@@ -120,22 +114,29 @@ input[type=range] {
     margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px
 }
 
 #queue-list li {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px;
-    border: 1px solid #334155;
-    border-radius: 12px;
-    background: #0f172a
+    padding: 8px 16px;
+    font-size: small;
 }
 
-#queue-list button {
-    border-radius: 999px;
-    padding: 6px 10px
+.btnNudge {
+    border-radius: 0;
+    border: none;
+    margin: 0 5px;
+    padding: 0;
+    font-size: 30px;
+    background-color: none;
+}
+
+#queue-list hr {
+    border: none;
+    border-top: 1px solid #999;
+    margin: 1px 0;
 }
 
 #statusLine {
@@ -196,11 +197,14 @@ input[type=range] {
     display: flex;
     justify-content: center; /* center horizontally */
     gap: 12px;               /* space between buttons */
-    padding: 1rem;
+    margin: 12px 0;
 }
 
-.controls > button {
+.big-controls > button {
     font-size: 36px;
+}
+.small-controls > button {
+    font-size: 15px;
 }
 
 a {
@@ -225,4 +229,12 @@ button.active {
 #changeNameBtn {
     margin-top: 12px;
     margin-bottom: 12px;
+}
+
+.headItem {
+    background-color: #006;
+}
+
+.pad-tab {
+    padding: 12px 16px;
 }

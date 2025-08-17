@@ -16,7 +16,7 @@
     </header>
 
     <main>
-      <section id='tab-current' class='tab active'>
+      <section id='tab-current' class='tab pad-tab active'>
         <div id='current-info'></div>
       </section>
 
@@ -24,13 +24,13 @@
         <ul id='queue-list'></ul>
       </section>
 
-      <section id='tab-sharing' class='tab'>
+      <section id='tab-sharing' class='tab pad-tab'>
         <a id='share-url'></a>
         <img id='qr-img' alt='QR'>
         <div id='room-code'></div>
       </section>
 
-      <section id='tab-members' class='tab'>
+      <section id='tab-members' class='tab pad-tab'>
         <div class='room'>Room: <span id='room-label'></span></div>
         <button id='changeNameBtn'>Change my name</button>
         <ul id='members-list'></ul>
@@ -46,11 +46,13 @@
         </div>
       </div>
       <audio id='audio' preload='metadata' playsinline></audio>
-      <div class='controls'>
-        <button id='rewindBtn' title='Rewind 5 seconds'>⏪ 5s</button>
+      <div class='controls big-controls'>
         <button id='prevBtn'>⏮</button>
         <button id='playPauseBtn'>▶️/⏸️</button>
         <button id='nextBtn'>⏭</button>
+      </div>
+      <div class='controls small-controls'>
+        <button id='rewindBtn' title='Rewind 5 seconds'>⏪ <span id='span5s'>5s</span></button>
         <button id='shuffleToggleBtn' data-mode='ordered' title='Toggle shuffle'>Shuffle</button>
       </div>
       <input type='range' id='seek' min='0' max='100' value='0'>
