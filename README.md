@@ -30,5 +30,7 @@ npm run dev
 - Covers are extracted if embedded art exists.
 - Dev-only endpoint: `/debug/state` dumps JSON.
 
+## limitations
+- Device audio output buffer latency unknown. Prolly ~200ms. If it matters, we need end-to-end per-device calibration.
+
 ## todo
-- bug: server time offset still wrong
